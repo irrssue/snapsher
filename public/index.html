@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Snapsher</title>
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="stylesheet" href="/style.css?v=DEV">
+</head>
+<body>
+<main>
+  <h1>snapsher</h1>
+
+  <section id="home">
+    <div class="glow"><i class="dot"></i></div>
+    <label class="btn primary">
+      Send files
+      <input id="pick" type="file" multiple hidden>
+    </label>
+    <button id="scanBtn" class="btn">Scan a code</button>
+    <p id="homeStatus"></p>
+  </section>
+
+  <section id="code" hidden>
+    <div class="glow"><canvas id="canvas" width="512" height="512"></canvas></div>
+    <p id="sendStatus">Point the other device at this code</p>
+    <div class="bar"><i id="sendBar"></i></div>
+    <button class="btn ghost" onclick="cancelTransfer()">Cancel</button>
+  </section>
+
+  <section id="scan" hidden>
+    <div class="glow"><video id="video" playsinline muted></video></div>
+    <p id="scanStatus">Looking for a code…</p>
+    <div class="bar"><i id="recvBar"></i></div>
+    <div id="saved"></div>
+    <button class="btn ghost" onclick="cancelTransfer()">Cancel</button>
+  </section>
+</main>
+<script type="module" src="/app.js?v=DEV"></script>
+</body>
+</html>
