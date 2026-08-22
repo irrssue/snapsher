@@ -140,15 +140,26 @@ export function encode(bytes) {
   return bits;
 }
 
+// Standard QR quiet-zone width (4 modules of background) baked around the
+// grid itself, not left to incidental black space on the page. Scanning a
+// phone screen means the receiver's camera frame is often filled edge-to-edge
+// by the sender's screen — with no margin drawn into the code, that leaves
+// zero quiet zone and every sample at the frame's own edge falls outside the
+// captured image, so tryDecodeFrom() rejects the whole frame every time.
+// Simulated tight-framing + blur + rotation captures fail almost completely
+// at 0 margin and pass 100% at 4 modules, matching the real QR spec's number.
+const QUIET = 4;
+
 /** Light-on-dark, matching the rest of the app: printed modules are white on a black square. */
 export function draw(ctx, bits, size) {
-  const m = size / N;
+  const m = size / (N + QUIET * 2);
+  const off = QUIET * m;
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, size, size);
   ctx.fillStyle = '#fff';
   for (let r = 0; r < N; r++) {
     for (let c = 0; c < N; c++) {
-      if (bits[r * N + c]) ctx.fillRect(Math.round(c * m), Math.round(r * m), Math.ceil(m), Math.ceil(m));
+      if (bits[r * N + c]) ctx.fillRect(Math.round(off + c * m), Math.round(off + r * m), Math.ceil(m), Math.ceil(m));
     }
   }
 }

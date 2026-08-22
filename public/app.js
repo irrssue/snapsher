@@ -129,7 +129,7 @@ function receive(video, stream) {
   $('scanStatus').textContent = 'Looking for a code…';
   $('saved').textContent = '';
   const noSignal = setTimeout(() => {
-    if (!sawFrame) $('scanStatus').textContent = 'Still looking… hold the phone steady and a little closer';
+    if (!sawFrame) $('scanStatus').textContent = 'Still looking… hold the phone steady, with the whole code in view';
   }, NO_SIGNAL_AFTER);
 
   // Browsers gate a *run* of auto-triggered downloads behind one permission
