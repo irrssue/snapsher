@@ -1,43 +1,77 @@
-// Self-check: rasterize a circle code in pure JS, then decode it back.
+// Self-check: rasterize QR frames in pure JS and decode them back, round-trip
+// the fountain layer with simulated frame loss, and confirm the server still
+// serves the app's own files.
 import assert from 'node:assert';
-import { N, G, encode, decode, newId } from './public/circle.js';
+import * as qr from './public/qr.js';
+import { Encoder, Decoder, BLOCK_LEN } from './public/fountain.js';
 
-function raster(hex, size, rot) {
-  const { ring0, ring1 } = encode(hex);
-  const g = new Uint8Array(size * size).fill(20); // dark field: the code is drawn light-on-dark
-  const c = size / 2;
-  const s = c / (G.r * 1.3);
+/** Rasterizes a module grid at an arbitrary rotation, no Canvas2D involved.
+ *  Margin has to clear a rotated square's bounding box (up to sqrt(2) at 45°)
+ *  or the code clips off the synthetic canvas — that isn't a decoder bug. */
+function raster(bits, size, rot) {
+  const scale = size / (qr.N * 1.6);
+  const g = new Uint8Array(size * size); // background = 0, matching qr.draw()'s black page
+  const cx = size / 2, cy = size / 2;
+  const cos = Math.cos(rot), sin = Math.sin(rot);
+  const half = (qr.N * scale) / 2;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      const dx = x - c, dy = y - c;
-      const r = Math.hypot(dx, dy) / s;
-      let a = Math.atan2(dy, dx) - rot;
-      a = ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-      const k = Math.floor((a / (2 * Math.PI)) * N) % N;
-      const on =
-        r < G.dot ||
-        (r > G.r0in && r < G.r0out && ring0[k]) ||
-        (r > G.r1in && r < G.r1out && ring1[k]);
-      if (on) g[y * size + x] = 235;
+      const dx = x - cx, dy = y - cy;
+      const ux = dx * cos + dy * sin;
+      const uy = -dx * sin + dy * cos;
+      const c = Math.floor((ux + half) / scale);
+      const r = Math.floor((uy + half) / scale);
+      if (r < 0 || c < 0 || r >= qr.N || c >= qr.N) continue;
+      g[y * size + x] = bits[r * qr.N + c] ? 255 : 0;
     }
   }
   return g;
 }
 
-for (const rot of [0, 0.4, 2.1, 4.7]) {
-  const hex = newId();
-  assert.equal(decode(raster(hex, 300, rot), 300, 300), hex, `rot=${rot}`);
+for (const rot of [0, 0.2, -0.15, 0.5, 1.0, -0.6, 2.9]) {
+  const payload = new Uint8Array(qr.DATA_BYTES);
+  crypto.getRandomValues(payload);
+  const bits = qr.encode(payload);
+  const gray = raster(bits, 300, rot);
+  const out = qr.decode(gray, 300, 300);
+  assert.ok(out, `qr decode failed at rot=${rot}`);
+  assert.deepEqual([...out], [...payload], `qr payload mismatch at rot=${rot}`);
 }
 
-// A frame with no code in it must not produce a false positive.
-assert.equal(decode(new Uint8Array(300 * 300).fill(200), 300, 300), null);
+// Frames with no code in them must not produce a false positive.
+assert.equal(qr.decode(new Uint8Array(300 * 300).fill(0), 300, 300), null);
+assert.equal(qr.decode(new Uint8Array(300 * 300).fill(255), 300, 300), null);
 
-// Signalling: the receiver POSTs `join` in the same tick it opens its stream, so
-// the sender's offer is often written before that stream exists. It must still
-// arrive, or both devices sit on "Connecting…" forever.
+// Fountain: a receiver that misses a third of the frames must still recover
+// the exact original bytes, in no particular order, with no back-channel.
+{
+  const text = 'The quick brown fox jumps over the lazy dog. '.repeat(500);
+  const payload = new TextEncoder().encode(text);
+  const enc = new Encoder(payload);
+  const dec = new Decoder();
+  let seq = 0;
+  while (!dec.complete) {
+    const frame = enc.frame(seq++);
+    if (Math.random() < 0.35) continue; // simulated loss
+    dec.addFrame(frame);
+    assert.ok(seq < enc.k * 30, 'fountain decoder did not converge');
+  }
+  const out = dec.assemble();
+  assert.ok(out, 'fountain assemble failed');
+  assert.equal(new TextDecoder().decode(out), text);
+}
+
+// A frame from an unrelated stream (bogus magic byte) must be ignored, not crash the decoder.
+{
+  const dec = new Decoder();
+  const junk = new Uint8Array(BLOCK_LEN + 15).fill(7);
+  assert.equal(dec.addFrame(junk), false);
+}
+
+// The server still just serves the app's own static files, version-stamped.
 {
   const { spawn } = await import('node:child_process');
-  const PORT = 8465;
+  const PORT = 8466;
   const base = `http://127.0.0.1:${PORT}`;
   const srv = spawn(process.execPath, ['server.js'], {
     env: { ...process.env, TLS: '0', PORT: String(PORT) },
@@ -45,68 +79,18 @@ assert.equal(decode(new Uint8Array(300 * 300).fill(200), 300, 300), null);
     stdio: 'ignore',
   });
 
-  const post = (id, m) => fetch(`${base}/sig/room1/${id}`, { method: 'POST', body: JSON.stringify(m) });
-  // Resolves with the first `data:` line the stream delivers.
-  const stream = async (id) => {
-    const res = await fetch(`${base}/sig/room1/${id}`);
-    const reader = res.body.getReader();
-    return {
-      // Times out rather than hanging: a lost message is a stream that stays silent.
-      next: () => Promise.race([
-        (async () => {
-        for (let buf = ''; ; ) {
-          const { value, done } = await reader.read();
-          if (done) return null;
-          buf += new TextDecoder().decode(value);
-          const line = buf.split('\n').find((l) => l.startsWith('data: '));
-          if (line) return JSON.parse(line.slice(6));
-        }
-        })(),
-        new Promise((r) => setTimeout(() => r('timed out'), 3000)),
-      ]),
-      close: () => reader.cancel(),
-    };
-  };
-
   for (let i = 0; ; i++) {
     try { await fetch(base); break; } catch { assert.ok(i < 50, 'server never came up'); await new Promise((r) => setTimeout(r, 100)); }
   }
 
-  const sender = await stream('S');
-  await post('R', { t: 'join' }); // receiver has no stream open yet
-  assert.deepEqual(await sender.next(), { t: 'join' });
-  await post('S', { t: 'offer' }); // ...and still none when the offer goes out
+  const html = await (await fetch(base)).text();
+  assert.match(html, /app\.js\?v=[0-9a-f]{8}/, 'index.html was not version-stamped');
 
-  const receiver = await stream('R');
-  assert.deepEqual(await receiver.next(), { t: 'offer' }, 'offer lost to a late stream');
-
-  await sender.close();
-  await receiver.close();
-
-  // Relay fallback carrying a batch: one POST per file in, one GET per file out,
-  // in order, each pickup restating the count so the receiver knows to come back.
-  const put = (name, body) =>
-    fetch(`${base}/relay/room2`, { method: 'POST', headers: { 'x-name': name, 'x-count': '2' }, body });
-  assert.equal((await put('a.jpg', 'AAA')).status, 200);
-  assert.equal((await put('b.jpg', 'BBBB')).status, 200);
-
-  const first = await fetch(`${base}/relay/room2`);
-  assert.equal(first.headers.get('x-name'), 'a.jpg');
-  assert.equal(first.headers.get('x-count'), '2');
-  assert.equal(await first.text(), 'AAA');
-
-  const second = await fetch(`${base}/relay/room2`);
-  assert.equal(second.headers.get('x-name'), 'b.jpg');
-  assert.equal(await second.text(), 'BBBB');
-
-  // The whole batch is out, so the room is gone rather than lingering in memory.
-  assert.equal((await fetch(`${base}/relay/room2`)).status, 404, 'relay held on past its count');
-
-  // A cancel drops everything still waiting, not just the file at the head.
-  await put('c.jpg', 'CCC');
-  await put('d.jpg', 'DDD');
-  await fetch(`${base}/relay/room2`, { method: 'DELETE' });
-  assert.equal((await fetch(`${base}/relay/room2`)).status, 404, 'cancel left a file behind');
+  for (const f of ['app.js', 'qr.js', 'fountain.js', 'style.css']) {
+    const res = await fetch(`${base}/${f}`);
+    assert.equal(res.status, 200, `${f} did not serve`);
+  }
+  assert.equal((await fetch(`${base}/nope`)).status, 404);
 
   srv.kill();
 }

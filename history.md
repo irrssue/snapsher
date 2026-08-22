@@ -162,3 +162,92 @@ Listed so the reasoning does not have to be redone.
 - No video handling, by original request.
 - The decoder samples on the assumption that the code is roughly face-on. Strong perspective is not corrected for. If scanning at an angle proves annoying in practice, that is where to look.
 - There is no cleanup for the `uploads` rate-limit Map. It grows one entry per distinct IP and is never pruned. Harmless at household scale, worth fixing if exposure widens.
+
+## 2026-08-22: replaced the transport with optical QR streaming
+
+Everything above this line describes the WebRTC/circle-code version. That version is gone: the
+"possible next steps" list above (manifest support, the uploads rate-limit Map) no longer applies
+because the code it refers to — `/sig`, `/relay`, the circle code, WebRTC entirely — was deleted,
+not extended. This section is the record of what replaced it and why.
+
+### What prompted it
+
+The user pointed at a Tom's Hardware piece on streaming a file's data directly through an animated
+QR code at up to ~190 KB/s phone-to-phone, and its reference implementation,
+[decimen-optical-transfer](https://github.com/bashalarmistalt/decimen-optical-transfer) (verified
+to actually exist and be what it claimed — the first automated summary of it looked suspiciously
+clean, so it got checked against the GitHub API and cloned before anything was trusted from it).
+They wanted snapsher's whole transport rebuilt around that idea, keeping the existing three-screen
+UI shell (home / show-a-code / scan-a-code).
+
+Two decisions were made explicitly before writing any code, via direct questions back to the user:
+**full replacement** of WebRTC/signalling/relay (not a hybrid — `server.js` is now a plain static
+file server), and a **hand-rolled, zero-dependency** QR encoder and decoder in `public/qr.js`,
+matching the project's existing "stdlib before dependencies" rule and `circle.js`'s own precedent
+of hand-rolled vision code, rather than vendoring a library like jsQR.
+
+### Why the format isn't spec-compliant QR
+
+`decimen-optical-transfer` is AGPL-3.0. Its actual wire protocol (fountain coding, frame headers,
+pinned QR mask) was deliberately **not** ported from its source — that would have carried the
+license into this repo. Everything in `public/qr.js` and `public/fountain.js` is an independent
+re-derivation of the underlying published ideas (Luby Transform fountain codes, QR's own
+finder/timing/alignment pattern structure, Reed-Solomon over GF(256)), the same way `circle.js` was
+always an original design and not a copy of anything.
+
+That independence is also what motivated cutting scope aggressively versus real QR: no
+version-info or format-info blocks, a single pinned mask, plain raster-order data placement
+instead of the spec's zigzag, and — biggest simplification — Reed-Solomon parity that is
+**verified, not corrected**. A frame with any bit error is just dropped; there's no
+Berlekamp-Massey/Chien/Forney in this codebase at all. That's a deliberate risk trade: this decoder
+can only be checked in this environment against synthetic, self-generated test images
+(`test.mjs` rasterizes at several rotations up to full about-face and checks round-trip), never
+against a real phone camera. Every one of those simplifications is a subsystem that didn't have to
+be hand-written and verified blind. `circle.js` had the same "confirmed working by hand" gap before
+it was trusted — this is in the same position, just for a considerably bigger algorithm.
+
+### The format
+
+`public/qr.js`: fixed 41×41 modules (`N`), fixed Reed-Solomon parity fraction (`EC_FRACTION`, 0.2
+of usable codewords). That currently works out to 141 payload bytes per frame, 35 of them parity.
+Neither number is tuned against real hardware yet — see the README's "Transport" section for the
+full tunable list.
+
+`public/fountain.js`: 15-byte frame header (magic byte, session id, sequence number, total payload
+length, an FNV-1a checksum of the whole payload) — no `k` field, since the receiver derives block
+count from `totalLen` and the fixed block length. Systematic sweep of all source blocks, then
+mid-degree repair frames forever, seeded deterministically per `(session, seq)` via a small
+Mulberry32 PRNG so sender and receiver agree without a handshake. This is a considerably simpler
+scheme than decimen's own (no robust-soliton distribution, no `Math.log`-determinism landmine to
+guard against — see their `dlog()` if curious what that bug class looks like), traded down on
+purpose since matching their exact degree distribution wasn't the point; matching their
+*insight* (a one-way channel wants erasure-tolerant, order-independent frames) was.
+
+### What changed in the UI
+
+The three-screen flow is unchanged. The circle-shaped code became a square QR frame — the `.glow`
+container was already just a plain square box (the circular *look* was always the circle code's own
+drawing against a matching black page, not a CSS clip), so no layout rework was needed there.
+`#home`'s pulsing dot lost the geometry-derived sizing comment (there's no `G` object to derive it
+from any more) and became a small square instead of a circle, otherwise unchanged. The sender's
+progress bar no longer means "percent sent" — there's no back-channel to know that — it now cycles
+once per systematic sweep as an honest "still broadcasting" signal instead. The `?r=` shareable-link
+fallback is gone: there's no server-side room for a pasted link to join any more.
+
+### Batch size
+
+Old cap was 500 MB, sized for LAN-speed WebRTC. Optical transfer is nowhere near that fast, so the
+new cap is 20 MB — a guess, not a measurement, pending real throughput numbers. The receiver also
+now holds the *entire* batch in memory and writes nothing out until the whole fountain payload has
+reassembled (files no longer stream in one at a time the way they did over the DataChannel), which
+pushes the sane cap down further than throughput alone would.
+
+### What's still unverified
+
+Real camera-to-screen scanning. `node test.mjs` passes — QR round-trip at seven rotations
+including two past 90°, a fountain round-trip that drops 35% of frames and still reconstructs
+exact bytes, and a server smoke test — but none of that touches a real lens, real motion blur, real
+ambient light, or real phone CPU decode speed. `SEND_INTERVAL`, `SCAN_INTERVAL`, `N`, and
+`EC_FRACTION` are first guesses. Whoever picks this up next should scan an actual phone against an
+actual phone before trusting throughput or reliability numbers, exactly as this file's 2026-08-08
+entry above had to before the circle code was trusted.

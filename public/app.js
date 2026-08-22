@@ -1,86 +1,58 @@
-import { draw, decode, newId } from './circle.js?v=DEV';
+import * as qr from './qr.js?v=DEV';
+import { Encoder, Decoder } from './fountain.js?v=DEV';
 
 const $ = (id) => document.getElementById(id);
-const ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-const CHUNK = 16384;
-const RELAY_AFTER = 6000; // give the direct connection this long before relaying
-// The receiver assembles one file at a time in memory, but it holds every
-// finished blob until the user has saved them, so the batch is what needs a cap.
-const BATCH_MAX = 500 << 20;
 
-/** Redraw the code every frame so the loose dust drifts. The bits never move. */
-function drawLoop(id) {
-  const cv = $('canvas');
-  const ctx = cv.getContext('2d');
-  const t0 = performance.now();
-  const frame = (now) => {
-    draw(ctx, id, cv.width, (now - t0) / 1000);
-    requestAnimationFrame(frame);
-  };
-  requestAnimationFrame(frame);
-}
+// Tunable, unverified against real hardware yet — see history.md.
+const SEND_INTERVAL = 70; // ms between drawn frames (~14fps)
+const SCAN_INTERVAL = 90; // ms between camera decode attempts (~11fps)
+const CAPTURE = 480; // camera capture crop, px — more than circle.js used, QR needs finer resolution
+const NO_SIGNAL_AFTER = 4000; // ms with nothing decoded before nudging the user
+
+// Optical transfer is far slower than the old LAN WebRTC path was, so the
+// sensible batch size is much smaller too. This is a guess pending a real
+// throughput number from actual devices.
+const BATCH_MAX = 20 << 20;
 
 const show = (name) => {
   for (const s of document.querySelectorAll('section')) s.hidden = s.id !== name;
 };
 const pct = (el, v) => (el.style.width = `${Math.round(v * 100)}%`);
 
-/** Candidates routinely arrive before the description they belong to. */
-function iceQueue(pc) {
-  const q = [];
-  return {
-    add: (c) => (pc.remoteDescription ? pc.addIceCandidate(c) : q.push(c)),
-    flush: () => Promise.all(q.splice(0).map((c) => pc.addIceCandidate(c))),
-  };
-}
-
-/** SSE down, POST up. The server just relays to the other member of the room. */
-function signal(room) {
-  const me = crypto.randomUUID();
-  const es = new EventSource(`/sig/${room}/${me}`);
-  let chain = Promise.resolve();
-  return {
-    // Serialized: an offer is fully applied before the next message is touched.
-    onMessage: (fn) => {
-      es.onmessage = (e) => {
-        chain = chain.then(() => fn(JSON.parse(e.data))).catch((err) => console.error(err));
-      };
-    },
-    // keepalive so a cancel's goodbye still leaves as the page navigates away.
-    send: (m) => fetch(`/sig/${room}/${me}`, { method: 'POST', body: JSON.stringify(m), keepalive: true }),
-    close: () => es.close(),
-  };
-}
-
-// ---- cancelling ----
-
-// Whatever pairing is currently live, so Cancel can take all of it down: the
-// signalling stream, the peer connection, an upload in flight, and the copy the
-// relay may already be holding for this room.
+// Whatever loop is currently live, so Cancel can tear it down. There's no
+// network peer to notify any more — cancelling just stops locally.
 let active = null;
 
 window.cancelTransfer = () => {
   const a = active;
   active = null;
-  if (!a) return void (location.href = '/');
-  a.upload?.abort();
-  a.sig.send({ t: 'bye' }); // the other device stops waiting instead of timing out
-  a.sig.close();
-  a.pc.close();
-  fetch(`/relay/${a.room}`, { method: 'DELETE', keepalive: true })
-    .catch(() => {})
-    .finally(() => (location.href = '/'));
+  a?.stop();
+  location.href = '/';
 };
 
-// The sender's side of this is different: it keeps its session alive, because
-// its code stays on screen and stays scannable. See the `bye` branch in send().
-/** The sender cancelled: stop everything here too, without navigating. */
-function peerCancelled(a) {
-  active = null;
-  a.upload?.abort();
-  a.sig.close();
-  a.pc.close();
-  $('scanStatus').textContent = 'Cancelled on the other device';
+// ---- batch container: manifest + concatenated file bytes, as one fountain payload ----
+
+function packBatch(files, bytesList) {
+  const manifest = JSON.stringify(files.map((f, i) => ({ name: f.name, size: bytesList[i].length, type: f.type })));
+  const manifestBytes = new TextEncoder().encode(manifest);
+  const total = 4 + manifestBytes.length + bytesList.reduce((n, b) => n + b.length, 0);
+  const out = new Uint8Array(total);
+  new DataView(out.buffer).setUint32(0, manifestBytes.length, false);
+  out.set(manifestBytes, 4);
+  let off = 4 + manifestBytes.length;
+  for (const b of bytesList) { out.set(b, off); off += b.length; }
+  return out;
+}
+
+function unpackBatch(payload) {
+  const mlen = new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getUint32(0, false);
+  const manifest = JSON.parse(new TextDecoder().decode(payload.subarray(4, 4 + mlen)));
+  let off = 4 + mlen;
+  return manifest.map((m) => {
+    const bytes = payload.subarray(off, off + m.size);
+    off += m.size;
+    return { name: m.name, type: m.type, bytes };
+  });
 }
 
 // ---- sending ----
@@ -90,7 +62,8 @@ $('pick').onchange = (e) => {
   if (!files.length) return;
   const bytes = files.reduce((n, f) => n + f.size, 0);
   if (bytes > BATCH_MAX) {
-    $('homeStatus').textContent = `${Math.round(bytes / (1 << 20))} MB is too much at once. Keep a batch under 500 MB.`;
+    $('homeStatus').textContent =
+      `${Math.round(bytes / (1 << 20))} MB is too much for optical transfer. Keep a batch under ${BATCH_MAX >> 20} MB.`;
     e.target.value = ''; // so picking the same set again still fires onchange
     return;
   }
@@ -99,117 +72,29 @@ $('pick').onchange = (e) => {
 };
 
 async function send(files) {
-  const id = newId();
-  history.replaceState(null, '', `?r=${id}`); // sharable as a plain link too
   show('code');
-  drawLoop(id);
-  const sig = signal(id);
+  $('sendStatus').textContent = 'Preparing…';
 
-  // Everything below is one pairing attempt, and an attempt is disposable. A
-  // receiver that cancels leaves a half-built connection behind while this
-  // device carries on showing a perfectly good code, so the next scan has to be
-  // able to start over on the same room rather than knock on a dead session.
-  let pc, dc, ice, offered, claimed, fallback;
-  const attempt = () => {
-    pc?.close(); // takes its data channel and its pending candidates with it
-    clearTimeout(fallback);
-    pc = new RTCPeerConnection(ICE);
-    dc = pc.createDataChannel('file');
-    dc.binaryType = 'arraybuffer';
-    ice = iceQueue(pc);
-    offered = false;
-    claimed = false; // whichever path starts first wins
-    active = { room: id, sig, pc };
-    pc.onicecandidate = (e) => e.candidate && sig.send({ t: 'ice', c: e.candidate });
-    dc.onopen = () => {
-      if (claimed) return;
-      claimed = true;
-      transfer(dc, files);
-    };
+  const bytesList = await Promise.all(files.map((f) => f.arrayBuffer().then((b) => new Uint8Array(b))));
+  const enc = new Encoder(packBatch(files, bytesList));
+
+  const cv = $('canvas');
+  const ctx = cv.getContext('2d');
+  let seq = 0;
+  let stopped = false;
+  active = { stop: () => { stopped = true; } };
+
+  $('sendStatus').textContent = 'Point the other device’s camera at this code';
+  const loop = () => {
+    if (stopped) return;
+    qr.draw(ctx, qr.encode(enc.frame(seq)), cv.width);
+    // There's no back-channel, so this can't show real progress — only that a
+    // sweep of all blocks is cycling, which is the best honest signal available.
+    pct($('sendBar'), (seq % enc.k) / enc.k);
+    seq++;
+    setTimeout(loop, SEND_INTERVAL);
   };
-  attempt();
-
-  sig.onMessage(async (m) => {
-    if (m.t === 'bye') {
-      // Not the end of the session: the code is still on screen and still valid,
-      // so reset to waiting rather than tearing the signalling stream down.
-      active?.upload?.abort(); // or a relayed file lands after the receiver's DELETE
-      $('sendStatus').textContent = 'Cancelled. Scan this code again.';
-      pct($('sendBar'), 0);
-      return attempt();
-    }
-    if (m.t === 'join' && !offered) {
-      offered = true;
-      await pc.setLocalDescription(await pc.createOffer());
-      sig.send({ t: 'offer', sdp: pc.localDescription });
-      fallback = setTimeout(() => {
-        if (claimed) return;
-        claimed = true;
-        viaRelay(files, id);
-      }, RELAY_AFTER);
-    }
-    if (m.t === 'answer') {
-      await pc.setRemoteDescription(m.sdp);
-      await ice.flush();
-    }
-    if (m.t === 'ice') ice.add(m.c);
-  });
-}
-
-/** One file at a time down the same channel: a header, then its bytes. */
-async function transfer(dc, files) {
-  const total = files.reduce((n, f) => n + f.size, 0) || 1;
-  let sent = 0;
-  for (const [i, file] of files.entries()) {
-    $('sendStatus').textContent = label('Sending', file, i, files);
-    // `count` and `total` never change across a batch, but repeating them means
-    // the receiver knows the shape of the batch from whichever header it sees.
-    dc.send(JSON.stringify({ name: file.name, size: file.size, type: file.type, count: files.length, total }));
-    for (let off = 0; off < file.size; off += CHUNK) {
-      // Keep the send buffer bounded or a large file blows up memory.
-      while (dc.bufferedAmount > 4 << 20) await new Promise((r) => setTimeout(r, 20));
-      if (dc.readyState !== 'open') return; // cancelled, or the peer went away
-      const buf = await file.slice(off, off + CHUNK).arrayBuffer();
-      dc.send(buf);
-      sent += buf.byteLength;
-      pct($('sendBar'), sent / total);
-    }
-  }
-  pct($('sendBar'), 1);
-  $('sendStatus').textContent = files.length > 1 ? `Sent ${files.length} files` : 'Sent';
-}
-
-const label = (verb, file, i, files) =>
-  files.length > 1 ? `${verb} ${i + 1} of ${files.length}…` : `${verb} ${file.name}…`;
-
-/** No direct route to the other device, so hand the files to the server instead. */
-async function viaRelay(files, id) {
-  // Cancelling mid-upload has to abort this, or the file lands on the relay
-  // just after the DELETE and sits there waiting for a pickup that won't come.
-  const upload = new AbortController();
-  if (active) active.upload = upload;
-  for (const [i, file] of files.entries()) {
-    $('sendStatus').textContent = label('Relaying', file, i, files);
-    const res = await fetch(`/relay/${id}`, {
-      method: 'POST',
-      headers: {
-        'x-name': encodeURIComponent(file.name),
-        'x-type': file.type || '',
-        'x-count': String(files.length), // so the receiver knows how many pickups to wait for
-      },
-      body: file,
-      signal: upload.signal,
-    }).catch(() => null);
-    if (upload.signal.aborted) return;
-    if (!res?.ok) {
-      $('sendStatus').textContent = res?.status === 413
-        ? 'Too much to relay. Get both devices on the same WiFi.'
-        : 'Could not reach the other device.';
-      return;
-    }
-    pct($('sendBar'), (i + 1) / files.length);
-  }
-  $('sendStatus').textContent = files.length > 1 ? `Sent ${files.length} files (relayed)` : 'Sent (relayed)';
+  loop();
 }
 
 // ---- receiving ----
@@ -226,57 +111,32 @@ $('scanBtn').onclick = async () => {
   }
   video.srcObject = stream;
   await video.play();
-
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = 320;
-  const ctx = cv.getContext('2d', { willReadFrequently: true });
-  const gray = new Uint8Array(320 * 320);
-
-  const timer = setInterval(() => {
-    if (!video.videoWidth) return;
-    const side = Math.min(video.videoWidth, video.videoHeight);
-    ctx.drawImage(video, (video.videoWidth - side) / 2, (video.videoHeight - side) / 2, side, side, 0, 0, 320, 320);
-    const d = ctx.getImageData(0, 0, 320, 320).data;
-    for (let i = 0; i < gray.length; i++) gray[i] = (d[i * 4] * 77 + d[i * 4 + 1] * 151 + d[i * 4 + 2] * 28) >> 8;
-    const id = decode(gray, 320, 320);
-    if (!id) return;
-    clearInterval(timer);
-    stream.getTracks().forEach((t) => t.stop());
-    receive(id);
-  }, 200);
+  receive(video, stream);
 };
 
-// Fallback for when scanning isn't possible: open the sender's URL directly.
-const linked = new URLSearchParams(location.search).get('r');
-if (/^[0-9a-f]{9}$/.test(linked || '')) {
-  show('scan');
-  $('video').hidden = true;
-  receive(linked);
-}
+function receive(video, stream) {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = CAPTURE;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  const gray = new Uint8Array(CAPTURE * CAPTURE);
+  const dec = new Decoder();
 
-function receive(room) {
-  $('scanStatus').textContent = 'Connecting…';
-  const sig = signal(room);
-  const pc = new RTCPeerConnection(ICE);
-  const ice = iceQueue(pc);
-  pc.onicecandidate = (e) => e.candidate && sig.send({ t: 'ice', c: e.candidate });
+  let stopped = false;
+  let nextClick = 0; // earliest a download may fire, so a batch's saves stay spaced out
+  let sawFrame = false;
+  active = { stop: () => { stopped = true; stream.getTracks().forEach((t) => t.stop()); } };
 
-  // The sender's SSE stream may not be registered yet, so keep knocking.
-  const knock = setInterval(() => sig.send({ t: 'join' }), 700);
-  sig.send({ t: 'join' });
-
-  let claimed = false;
-  let relaying = false; // the relay is the live path, so its poll loop keeps going
-  let saved = 0, want = 1; // `want` is whatever the sender announced for this batch
-  let nextClick = 0; // earliest a download may fire, so a burst stays spaced out
-  active = { room, sig, pc };
+  $('scanStatus').textContent = 'Looking for a code…';
   $('saved').textContent = '';
+  const noSignal = setTimeout(() => {
+    if (!sawFrame) $('scanStatus').textContent = 'Still looking… hold the phone steady and a little closer';
+  }, NO_SIGNAL_AFTER);
 
   // Browsers gate a *run* of auto-triggered downloads behind one permission
-  // prompt ("this site wants to download multiple files"). That prompt is the
-  // whole mechanism, so ask for every file: granting it is what lets the rest
-  // through. Each file also keeps its link on screen, which covers the browser
-  // that blocks anyway and the user who declined.
+  // prompt; each file also keeps its link on screen for a browser that blocks
+  // anyway. Small files finish within a millisecond of each other here (the
+  // whole batch reassembles at once), so saves are spaced out or the prompt
+  // collapses down to just the first.
   const save = (blob, name) => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -284,76 +144,41 @@ function receive(room) {
     a.className = 'btn';
     a.textContent = `Save ${name}`;
     $('saved').appendChild(a);
-    // Small files finish within a millisecond of each other, and downloads
-    // fired that close together get collapsed into one prompt that only the
-    // first survives. Space them, but only against the previous *click*, so a
-    // batch arriving slowly on its own never accumulates a delay.
     const at = Math.max(Date.now(), nextClick);
     nextClick = at + 400;
     setTimeout(() => a.click(), at - Date.now());
-    if (++saved < want) return;
-    $('scanStatus').textContent = want > 1 ? `Saved ${want} files` : `Saved ${name}`;
-    sig.close();
   };
 
-  pc.ondatachannel = (e) => {
-    if (claimed) return;
-    claimed = true;
-    const dc = e.channel;
-    dc.binaryType = 'arraybuffer';
-    let meta = null, parts = [], got = 0, done = 0;
-    const complete = () => {
-      save(new Blob(parts, { type: meta.type || 'application/octet-stream' }), meta.name);
-      done += meta.size;
-      parts = [];
-      got = 0;
-    };
-    dc.onmessage = (ev) => {
-      if (typeof ev.data === 'string') {
-        meta = JSON.parse(ev.data);
-        want = meta.count || 1;
-        $('scanStatus').textContent =
-          want > 1 ? `Receiving ${saved + 1} of ${want}…` : `Receiving ${meta.name}…`;
-        if (!meta.size) complete(); // a zero-byte file sends no chunks to close it out
-        return;
+  const finish = () => {
+    clearTimeout(noSignal);
+    stopped = true;
+    stream.getTracks().forEach((t) => t.stop());
+    const payload = dec.assemble();
+    if (!payload) {
+      $('scanStatus').textContent = 'Transfer corrupted. Ask the sender to try again.';
+      return;
+    }
+    const batch = unpackBatch(payload);
+    for (const f of batch) save(new Blob([f.bytes], { type: f.type || 'application/octet-stream' }), f.name);
+    pct($('recvBar'), 1);
+    $('scanStatus').textContent = batch.length > 1 ? `Saved ${batch.length} files` : `Saved ${batch[0].name}`;
+  };
+
+  const tick = () => {
+    if (stopped) return;
+    if (video.videoWidth) {
+      const side = Math.min(video.videoWidth, video.videoHeight);
+      ctx.drawImage(video, (video.videoWidth - side) / 2, (video.videoHeight - side) / 2, side, side, 0, 0, CAPTURE, CAPTURE);
+      const d = ctx.getImageData(0, 0, CAPTURE, CAPTURE).data;
+      for (let i = 0; i < gray.length; i++) gray[i] = (d[i * 4] * 77 + d[i * 4 + 1] * 151 + d[i * 4 + 2] * 28) >> 8;
+      const frame = qr.decode(gray, CAPTURE, CAPTURE);
+      if (frame && dec.addFrame(frame)) {
+        if (!sawFrame) { sawFrame = true; $('scanStatus').textContent = 'Receiving…'; }
+        if (dec.k) pct($('recvBar'), dec.solvedCount / dec.k);
+        if (dec.complete) return void finish();
       }
-      parts.push(ev.data);
-      got += ev.data.byteLength;
-      pct($('recvBar'), (done + got) / (meta.total || 1));
-      if (got >= meta.size) complete();
-    };
+    }
+    setTimeout(tick, SCAN_INTERVAL);
   };
-
-  // If nothing arrives directly, the sender will have handed it to the relay.
-  // The relay hands back one file per GET, so a batch keeps polling after the
-  // first pickup - including through the 404s while the next one is uploading.
-  setTimeout(async function poll() {
-    if (claimed && !relaying) return; // the data channel got there first
-    const res = await fetch(`/relay/${room}`);
-    if (res.status === 404) return void setTimeout(poll, relaying ? 800 : 1500);
-    claimed = relaying = true;
-    want = Number(res.headers.get('x-count')) || 1;
-    $('scanStatus').textContent =
-      want > 1 ? `Receiving ${saved + 1} of ${want} via relay…` : 'Receiving via relay…';
-    pct($('recvBar'), (saved + 1) / want);
-    save(await res.blob(), decodeURIComponent(res.headers.get('x-name') || 'file'));
-    if (saved < want) setTimeout(poll, 800);
-  }, RELAY_AFTER + 1500);
-
-  sig.onMessage(async (m) => {
-    if (m.t === 'bye') {
-      claimed = true; // stop polling the relay for files that are gone
-      relaying = false; // ...including the rest of a batch that was mid-pickup
-      clearInterval(knock);
-      return peerCancelled(active || { sig, pc });
-    }
-    if (m.t === 'offer') {
-      clearInterval(knock);
-      await pc.setRemoteDescription(m.sdp);
-      await ice.flush();
-      await pc.setLocalDescription(await pc.createAnswer());
-      sig.send({ t: 'answer', sdp: pc.localDescription });
-    }
-    if (m.t === 'ice') ice.add(m.c);
-  });
+  tick();
 }

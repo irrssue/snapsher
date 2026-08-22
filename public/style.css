@@ -48,7 +48,7 @@ section[hidden] { display: none; }
 .btn.primary:hover { background: #e6e6e6; border-color: #e6e6e6; }
 .btn.ghost { border-color: transparent; background: none; color: #7a7a7a; }
 
-/* The circle is the only thing here that can give: everything else on the
+/* The square is the only thing here that can give: everything else on the
    tallest screen (#home) is fixed furniture adding up to 302px, so cap the
    square at whatever the shortest viewport has left over. Phone browsers hand
    back a screen shorter than the window, and a screen that has to scroll is
@@ -61,24 +61,26 @@ section[hidden] { display: none; }
   aspect-ratio: 1;
 }
 
-/* Home shows only the code's centre dot, in the exact spot the whole code will
-   occupy: picking a file swaps the sections and the dot stays put while the
-   rings bloom around it. Two things keep it on the same line as #code's dot,
-   given `main` is centred on its own height:
+/* Home shows only a small placeholder dot, in the exact spot the whole QR
+   frame will occupy: picking a file swaps the sections and the dot stays put
+   while the code fills in around it. Two things keep it on the same line as
+   #code's canvas, given `main` is centred on its own height:
    - the wordmark is hidden but keeps its box, so the run-up above is identical;
    - #home's two buttons are 20px taller than #code's status+bar+button, and a
      centred main splits that, so 20px above the circle cancels it out. */
 body:has(#home:not([hidden])) h1 { visibility: hidden; }
 #home .glow { margin-top: 28px; }
 
-/* 2 * G.dot / (G.r * 2.35) in circle.js — the centre dot draw() paints. */
+/* A plain "ready" affordance while #home is showing — not tied to the QR
+   frame's geometry, just sized to look proportionate in the same box the
+   code will occupy once a file is picked. */
 .dot {
   position: absolute;
   inset: 0;
   margin: auto;
-  width: 18.617%;
-  height: 18.617%;
-  border-radius: 50%;
+  width: 20%;
+  height: 20%;
+  border-radius: 4px;
   background: #fff;
   animation: beat 1.44s ease-out infinite;
 }

@@ -1,7 +1,8 @@
 # Snapsher
 
-Peer-to-peer file transfer over WebRTC, paired by pointing one phone's camera at a circular code on the other's screen.
-The server (`server.js`) only relays signalling (SSE down, POST up) and acts as a fallback file relay when no direct route exists.
+Phone-to-phone file transfer with a screen and a camera, no network in the loop: the sender streams
+the file's bytes into an animated QR-shaped code, and the receiver reads it back with its camera.
+The server (`server.js`) only serves the app's own static files.
 
 No package.json, no dependencies, no build step.
 Node stdlib only on the server, plain ES modules in `public/`.
@@ -42,10 +43,12 @@ Black and white only.
 No colour anywhere, including the mobile status bar tint (`theme-color` is `#000`).
 No decorative borders.
 
-No decorative background visual on either pairing screen: the sending screen shows only the circle code, the scanning screen only the camera circle.
+No decorative background visual on either pairing screen: the sending screen shows only the QR frame, the scanning screen only the camera circle.
 
-## The circle code
+## The QR frame and the fountain layer
 
-`public/circle.js` is the whole format: a centre dot plus two concentric rings of 24 sectors, carrying a 36-bit session id and an 8-bit checksum.
-The checksum has to stay wide because the decoder tries all 24 rotations, and a narrow one lets a misaligned read pass as a plausible but wrong id.
-If you touch `encode`/`decodeBits`/`draw`, you have changed the wire format on both devices at once - re-run `test.mjs` and check a real scan, not just the unit test.
+`public/qr.js` is the whole code format: a bespoke, QR-*shaped* code (finder/timing/alignment patterns, Reed-Solomon-checked payload) — not ISO/IEC 18004. It is not meant to be read by a generic QR scanner, only by this app's own decoder. `public/fountain.js` is the streaming layer on top: frame headers and a systematic-carousel fountain code, so the receiver can lock onto the stream at any point and finish from any ~k frames in any order, no back-channel, no handshake.
+
+Both files are pure functions with no DOM dependency, so `node test.mjs` exercises the full encode → rasterize → decode → fountain-reassemble pipeline without a browser. If you touch `qr.js`'s module geometry, masking, or Reed-Solomon parameters, or `fountain.js`'s header layout or carousel logic, you have changed the wire format on both devices at once - re-run `test.mjs` and check a real scan, not just the unit test. Real camera-to-screen scan reliability has not been verified on real hardware; see history.md's 2026-08-22 entry before assuming the tunable constants (`N`, `EC_FRACTION`, `SEND_INTERVAL`, `SCAN_INTERVAL`) are already right.
+
+decimen-optical-transfer (the project that inspired this) is AGPL-3.0. Nothing here is ported from its source — see history.md for why that boundary matters and what was independently re-derived instead.
