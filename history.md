@@ -251,3 +251,48 @@ ambient light, or real phone CPU decode speed. `SEND_INTERVAL`, `SCAN_INTERVAL`,
 `EC_FRACTION` are first guesses. Whoever picks this up next should scan an actual phone against an
 actual phone before trusting throughput or reliability numbers, exactly as this file's 2026-08-08
 entry above had to before the circle code was trusted.
+
+## 2026-08-22: fixed a real scan failure, then raised throughput
+
+First real-device scan (not just `node test.mjs`) found two bugs the synthetic rotation-only test
+never exercised, plus one deliberate throughput retune.
+
+**No quiet zone baked into the drawn code.** `qr.draw()` filled the code edge-to-edge across its
+own canvas; the only margin around it was whatever black page happened to be visible past the
+sender's screen in the receiver's camera frame. Framing tight on the sender's screen — the natural
+instinct scanning any QR code — left zero margin, and `tryDecodeFrom()` rejects a frame outright if
+even one sampled module lands outside the captured image. Simulated tight framing + blur + rotation
+failed almost every capture at 0 margin, passed 100% once a standard 4-module quiet zone (`QUIET` in
+`qr.js`) is drawn around the grid itself, matching real QR's own quiet-zone requirement. The
+no-signal nudge also told users to move *closer*, which is exactly backwards once framing is the
+constraint — changed to "keep the whole code in view."
+
+**Rotation clipping killed whole frames over a handful of modules.** Independent of the above: a
+receiving phone tilted relative to a flat sender screen rotates the code's bounding box past the
+capture frame's edges — normal handheld geometry, no fault of the sender. `tryDecodeFrom()`'s
+sampler returned a sentinel for any out-of-bounds coordinate and the caller discarded the entire
+frame on the first one, so a couple of clipped corner modules (out of 3000+) failed frames that were
+otherwise perfectly readable. Changed to clamp to the nearest in-bounds pixel instead; RS validation
+still catches a frame where that clamp produced real corruption, same as any other bit error. This
+one turned out to matter more than the quiet zone for capacity headroom: without it, raising `N`
+made rotation tolerance *worse* (the fixed finder-margin becomes a shrinking fraction of a bigger
+grid), which would have capped how far `N` could reasonably go.
+
+**Throughput.** With both fixed, simulation (tight framing, blur, ~11.5° tilt, sensor noise, 300
+trials) stayed at 100% pass all the way up to `N=55` — up from 41 modules, doubling data bytes per
+frame (141 → 314) — where it had been 60-100% at `N=41` before the rotation-clamp fix and degraded
+past `N=65` even after it (finder-pattern occlusion at extreme tilt is a real geometric limit, not
+an artifact the clamp can fix). `EC_FRACTION` dropped 0.2 → 0.08: RS parity here is verify-only, so
+27 parity bytes is still wildly oversized for detection alone (needs every one of ~27 independent
+syndromes to hit zero by chance to false-accept a corrupt frame) while freeing most of that space for
+payload. `SEND_INTERVAL`/`SCAN_INTERVAL` tightened 70/90ms → 50/65ms — `decode()` itself is still
+only ~5-6ms per attempt even at the bigger grid on a dev machine, so the old intervals were mostly
+idle wait rather than compute time; real per-tick cost is dominated by `getImageData` + the manual
+grayscale conversion over the 480×480 capture, which none of these changes touch.
+
+Net effect against the old numbers: roughly 2.2x bytes/frame × up to ~1.4x attempt rate ≈ 3x
+estimated throughput — still an estimate, not a measurement. All of the above (quiet zone, rotation
+clamp, and the `N`/`EC_FRACTION`/interval retune) is simulation-validated only; the simulation itself
+is closer to real capture conditions than `test.mjs`'s pure-rotation raster (adds blur, sensor noise,
+and worst-case tight framing) but still isn't a real lens. Retest on real hardware before pushing any
+of these further.

@@ -3,9 +3,11 @@ import { Encoder, Decoder } from './fountain.js?v=DEV';
 
 const $ = (id) => document.getElementById(id);
 
-// Tunable, unverified against real hardware yet — see history.md.
-const SEND_INTERVAL = 70; // ms between drawn frames (~14fps)
-const SCAN_INTERVAL = 90; // ms between camera decode attempts (~11fps)
+// Tunable, unverified against real hardware yet — see history.md. Tightened
+// from 70/90ms: decode() is still only ~5-6ms per attempt even at the larger
+// grid (qr.js), so the old intervals were mostly idle wait, not compute time.
+const SEND_INTERVAL = 50; // ms between drawn frames (~20fps)
+const SCAN_INTERVAL = 65; // ms between camera decode attempts (~15fps)
 const CAPTURE = 480; // camera capture crop, px — more than circle.js used, QR needs finer resolution
 const NO_SIGNAL_AFTER = 4000; // ms with nothing decoded before nudging the user
 

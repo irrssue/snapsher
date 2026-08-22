@@ -14,8 +14,16 @@
 // syndrome computation, which is a much smaller and safer thing to hand-write
 // without a real device to test against.
 
-export const N = 41; // modules per side — tune after real-device scan testing
-const EC_FRACTION = 0.2; // share of the frame's codewords spent on Reed-Solomon parity
+// N and EC_FRACTION were raised from the original 41 / 0.2 after simulating
+// realistic captures (tight framing edge-to-edge, gaussian blur, up to ~11.5°
+// tilt, sensor noise): 55 modules is the largest grid that still decoded
+// every simulated frame, and 0.08 still leaves 27 RS parity bytes — far more
+// than the handful needed for detection-only validation (a false-accepted
+// corrupt frame needs every one of those syndromes to hit zero by chance).
+// Together with EC_FRACTION this roughly doubles payload bytes per frame.
+// Still simulation-only, not real-device-verified — see history.md.
+export const N = 55; // modules per side
+const EC_FRACTION = 0.08; // share of the frame's codewords spent on Reed-Solomon parity
 
 // ---- GF(256) arithmetic, primitive polynomial 0x11D (the standard QR field) ----
 
@@ -271,11 +279,19 @@ function tryDecodeFrom(bit, w, h, { topLeft, topRight, bottomLeft }) {
   const ux = (topRight.x - topLeft.x) / span, uy = (topRight.y - topLeft.y) / span;
   const vx = (bottomLeft.x - topLeft.x) / span, vy = (bottomLeft.y - topLeft.y) / span;
 
+  // Tilting the receiving camera relative to a flat sender screen rotates the
+  // code's bounding box out past the frame's own edges — that's normal
+  // handheld geometry, not damage, and it only ever clips the handful of
+  // modules nearest a corner. Clamping to the nearest in-bounds pixel instead
+  // of rejecting the whole frame turns that into (at worst) a couple of wrong
+  // bits, which RS validation below still catches same as any other bit
+  // error; the old behaviour discarded every frame at anything past a few
+  // degrees of tilt for no reason tied to actual decode failure.
   const sample = (r, c) => {
     const px = topLeft.x + ux * (c - 3) + vx * (r - 3);
     const py = topLeft.y + uy * (c - 3) + vy * (r - 3);
-    const x = Math.round(px), y = Math.round(py);
-    if (x < 0 || y < 0 || x >= w || y >= h) return -1;
+    const x = Math.min(w - 1, Math.max(0, Math.round(px)));
+    const y = Math.min(h - 1, Math.max(0, Math.round(py)));
     return bit[y * w + x];
   };
 
@@ -284,9 +300,7 @@ function tryDecodeFrom(bit, w, h, { topLeft, topRight, bottomLeft }) {
   for (let i = 0; i < FREE.length && i < totalBits; i++) {
     const idx = FREE[i];
     const r = (idx / N) | 0, c = idx % N;
-    const raw = sample(r, c);
-    if (raw < 0) return null; // grid fell outside the frame
-    const bitVal = raw ^ mask(r, c);
+    const bitVal = sample(r, c) ^ mask(r, c);
     if (bitVal) codewords[i >> 3] |= 1 << (7 - (i & 7));
   }
   if (!rsValid(codewords, EC_BYTES)) return null;
