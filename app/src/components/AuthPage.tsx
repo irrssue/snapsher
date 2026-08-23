@@ -37,6 +37,7 @@ export function AuthPage({
     <div className="flex min-h-screen items-center justify-center bg-black px-6">
       {step === "credentials" ? (
         <form
+          key="credentials"
           onSubmit={(e) => {
             e.preventDefault();
             const formData = new FormData(e.currentTarget);
@@ -75,6 +76,7 @@ export function AuthPage({
         </form>
       ) : (
         <form
+          key="username"
           onSubmit={(e) => {
             e.preventDefault();
             const formData = new FormData(e.currentTarget);
