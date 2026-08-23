@@ -12,6 +12,12 @@ const SAMPLE_POSTS: Post[] = [
     username: "username",
     description: "Photo description here\nLorem",
   },
+  {
+    id: "2",
+    username: "username",
+    description:
+      "Photo description here\nLorem ipsum dolor sit amet\nconsectetur adipiscing elit",
+  },
 ];
 
 function App() {
