@@ -5,6 +5,7 @@ import cors from "cors";
 import { config } from "./config.js";
 import { authRouter } from "./auth.js";
 import { postsRouter, uploadsRouter } from "./posts.js";
+import { friendsRouter, usersRouter } from "./friends.js";
 import { avatarsRouter } from "./avatars.js";
 import { rateLimit } from "./rateLimit.js";
 import { attachSession, requireCsrfToken, startSessionSweeper } from "./sessions.js";
@@ -48,6 +49,8 @@ app.use(dynamicPaths, requireCsrfToken);
 
 app.use("/api/auth", authRouter);
 app.use("/api/posts", postsRouter);
+app.use("/api/friends", friendsRouter);
+app.use("/api/users", usersRouter);
 // Mounted ahead of the generic photo router so /uploads/avatars/* resolves
 // here instead of being tried as a post's photo filename.
 app.use("/uploads/avatars", avatarsRouter);

@@ -1,65 +1,99 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PersonIcon, UserPlusIcon } from "./icons";
-
-type Friend = {
-  id: number;
-  username: string;
-  avatarUrl: string | null;
-};
-
-type FriendRequest = {
-  id: number;
-  username: string;
-  avatarUrl: string | null;
-};
-
-type DiscoverableUser = {
-  id: number;
-  username: string;
-  avatarUrl: string | null;
-};
-
-/**
- * TODO: wire these up to real /api/friends, /api/friends/requests, and
- * /api/users search endpoints. Empty until then.
- */
-const NO_FRIENDS: Friend[] = [];
-const NO_REQUESTS: FriendRequest[] = [];
-const NO_USERS: DiscoverableUser[] = [];
+import {
+  acceptFriendRequest,
+  declineFriendRequest,
+  fetchFriendRequests,
+  fetchFriends,
+  removeFriend,
+  searchUsers,
+  sendFriendRequest,
+  type Friend,
+  type FriendRequest,
+} from "../api/friends";
 
 type SubTab = "friends" | "requests" | "add";
 
 export function FriendsTab() {
   const [subTab, setSubTab] = useState<SubTab>("friends");
-  const [friends, setFriends] = useState(NO_FRIENDS);
-  const [requests, setRequests] = useState(NO_REQUESTS);
+  const [friends, setFriends] = useState<Friend[]>([]);
+  const [requests, setRequests] = useState<FriendRequest[]>([]);
   const [query, setQuery] = useState("");
   const [discoverQuery, setDiscoverQuery] = useState("");
+  const [discoverableUsers, setDiscoverableUsers] = useState<Friend[]>([]);
   const [sentRequests, setSentRequests] = useState<number[]>([]);
 
-  const friendIds = new Set(friends.map((f) => f.id));
-  const requestIds = new Set(requests.map((r) => r.id));
+  useEffect(() => {
+    let active = true;
+    Promise.all([fetchFriends(), fetchFriendRequests()])
+      .then(([nextFriends, nextRequests]) => {
+        if (!active) return;
+        setFriends(nextFriends);
+        setRequests(nextRequests);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
 
-  function sendFriendRequest(id: number) {
+  useEffect(() => {
+    const trimmed = discoverQuery.trim();
+    if (!trimmed) {
+      setDiscoverableUsers([]);
+      return;
+    }
+
+    let active = true;
+    const timer = setTimeout(() => {
+      searchUsers(trimmed)
+        .then((users) => {
+          if (active) setDiscoverableUsers(users);
+        })
+        .catch(() => {
+          if (active) setDiscoverableUsers([]);
+        });
+    }, 250);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [discoverQuery]);
+
+  async function handleSendFriendRequest(id: number) {
     setSentRequests((current) => (current.includes(id) ? current : [...current, id]));
+    try {
+      await sendFriendRequest(id);
+    } catch {
+      setSentRequests((current) => current.filter((sentId) => sentId !== id));
+    }
   }
 
-  const trimmedDiscoverQuery = discoverQuery.trim().toLowerCase();
-  const discoverableUsers = NO_USERS.filter(
-    (u) => !friendIds.has(u.id) && !requestIds.has(u.id)
-  ).filter((u) => u.username.toLowerCase().includes(trimmedDiscoverQuery));
-
-  function removeFriend(id: number) {
+  async function handleRemoveFriend(id: number) {
     setFriends((current) => current.filter((f) => f.id !== id));
+    await removeFriend(id).catch(() => undefined);
   }
 
-  function acceptRequest(request: FriendRequest) {
+  async function handleAcceptRequest(request: FriendRequest) {
     setRequests((current) => current.filter((r) => r.id !== request.id));
-    setFriends((current) => [...current, { id: request.id, username: request.username, avatarUrl: request.avatarUrl }]);
+    setFriends((current) => [
+      ...current,
+      { id: request.id, username: request.username, avatarUrl: request.avatarUrl },
+    ]);
+    try {
+      await acceptFriendRequest(request.id);
+      // The request id is the friend_requests row id, not the friend's user
+      // id, so the freshly-accepted friend's real id comes from a refetch.
+      fetchFriends().then(setFriends).catch(() => undefined);
+    } catch {
+      fetchFriendRequests().then(setRequests).catch(() => undefined);
+    }
   }
 
-  function declineRequest(id: number) {
+  async function handleDeclineRequest(id: number) {
     setRequests((current) => current.filter((r) => r.id !== id));
+    await declineFriendRequest(id).catch(() => undefined);
   }
 
   const filteredFriends = friends.filter((f) =>
@@ -145,7 +179,7 @@ export function FriendsTab() {
 
                 <button
                   type="button"
-                  onClick={() => removeFriend(friend.id)}
+                  onClick={() => handleRemoveFriend(friend.id)}
                   className="shrink-0 rounded-full bg-neutral-800 px-4 py-1.5 text-xs text-neutral-300 transition-colors hover:text-white"
                 >
                   Remove
@@ -180,14 +214,14 @@ export function FriendsTab() {
               <div className="flex shrink-0 items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => declineRequest(request.id)}
+                  onClick={() => handleDeclineRequest(request.id)}
                   className="rounded-full bg-neutral-800 px-4 py-1.5 text-xs text-neutral-300 transition-colors hover:text-white"
                 >
                   Decline
                 </button>
                 <button
                   type="button"
-                  onClick={() => acceptRequest(request)}
+                  onClick={() => handleAcceptRequest(request)}
                   className="rounded-full bg-white px-4 py-1.5 text-xs text-black transition-colors hover:opacity-90"
                 >
                   Accept
@@ -237,7 +271,7 @@ export function FriendsTab() {
                   <button
                     type="button"
                     disabled={alreadySent}
-                    onClick={() => sendFriendRequest(discoverableUser.id)}
+                    onClick={() => handleSendFriendRequest(discoverableUser.id)}
                     className={`shrink-0 rounded-full px-4 py-1.5 text-xs transition-colors ${
                       alreadySent
                         ? "bg-neutral-900 text-neutral-500"
@@ -252,9 +286,9 @@ export function FriendsTab() {
 
             {discoverableUsers.length === 0 && (
               <p className="pt-8 text-center text-sm text-neutral-500">
-                {trimmedDiscoverQuery
+                {discoverQuery.trim()
                   ? `No one matches "${discoverQuery}".`
-                  : "No new people to add right now."}
+                  : "Search for someone to add."}
               </p>
             )}
           </div>

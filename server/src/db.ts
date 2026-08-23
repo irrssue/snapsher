@@ -61,11 +61,33 @@ db.exec(`
   )
 `);
 
+/**
+ * One row per request, requester -> addressee. Friendship is the "accepted"
+ * state of that same row rather than a separate table, so there is exactly
+ * one place that can disagree with itself about whether two users are
+ * friends. Reads that want "are A and B friends" check both directions.
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS friend_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    requester_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    addressee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at INTEGER NOT NULL
+  )
+`);
+
 db.exec(
   "CREATE INDEX IF NOT EXISTS idx_posts_user_created ON posts (user_id, created_at DESC)",
 );
 db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions (expires_at)");
+db.exec(
+  "CREATE INDEX IF NOT EXISTS idx_friend_requests_addressee ON friend_requests (addressee_id, status)",
+);
+db.exec(
+  "CREATE INDEX IF NOT EXISTS idx_friend_requests_requester ON friend_requests (requester_id, status)",
+);
 
 /**
  * Unique indexes that can fail on data that predates them, so each is reported
@@ -79,6 +101,7 @@ for (const [name, sql] of [
   ["posts.photo_file", "CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_photo_file ON posts (photo_file)"],
   ["users.email", "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_nocase ON users (email COLLATE NOCASE)"],
   ["users.username", "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_nocase ON users (username COLLATE NOCASE)"],
+  ["friend_requests.pair", "CREATE UNIQUE INDEX IF NOT EXISTS idx_friend_requests_pair ON friend_requests (requester_id, addressee_id)"],
 ] as const) {
   try {
     db.exec(sql);
@@ -103,6 +126,14 @@ export type PostRow = {
   user_id: number;
   description: string | null;
   photo_file: string;
+  created_at: number;
+};
+
+export type FriendRequestRow = {
+  id: number;
+  requester_id: number;
+  addressee_id: number;
+  status: "pending" | "accepted";
   created_at: number;
 };
 

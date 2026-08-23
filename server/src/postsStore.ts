@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { db, type PostRow } from "./db.js";
 import { avatarUrlFor } from "./avatarsStore.js";
+import { friendIdsFor } from "./friendsStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -25,7 +26,7 @@ const FEED_LIMIT = 100;
  * request from reaching another account's rows even if a route forgets a check.
  *
  * The policies themselves:
- *   - feed        — any signed-in member may read every member's posts
+ *   - feed        — a member may read their own posts and their friends' posts
  *   - quota       — a user may only ever see their own posting window
  *   - create      — the author is taken from the session, never from the body
  *   - photo bytes — readable only if it belongs to a post the actor may read
@@ -69,13 +70,22 @@ function toPublicPost(row: FeedRow): PublicPost {
 
 const FEED_COLUMNS = `posts.id, posts.description, posts.photo_file, posts.created_at, users.username, users.avatar_file`;
 
-const selectFeed = db.prepare(
-  `SELECT ${FEED_COLUMNS}
-     FROM posts
-     JOIN users ON users.id = posts.user_id
-    ORDER BY posts.created_at DESC
-    LIMIT ?`,
-);
+/**
+ * The `?` placeholders for the author list are spliced in per-call since
+ * better-sqlite3 has no array binding — `selectFeedFor` builds this with one
+ * `?` per id in `authorIds` before preparing it.
+ */
+function selectFeedStatement(authorCount: number) {
+  const placeholders = new Array(authorCount).fill("?").join(", ");
+  return db.prepare(
+    `SELECT ${FEED_COLUMNS}
+       FROM posts
+       JOIN users ON users.id = posts.user_id
+      WHERE posts.user_id IN (${placeholders})
+      ORDER BY posts.created_at DESC
+      LIMIT ?`,
+  );
+}
 const selectPostById = db.prepare(
   `SELECT ${FEED_COLUMNS}
      FROM posts
@@ -103,9 +113,21 @@ function nextAllowedAt(userId: number): number {
   return last ? last.created_at + POST_INTERVAL_MS : 0;
 }
 
+/**
+ * Home feed policy: a member sees their own posts plus posts from accepted
+ * friends only — never the whole member base. [[Actor]] alone used to be
+ * enough to read every row here; it no longer is now that friendship gates
+ * visibility, which is why the author list below is computed per call rather
+ * than cached.
+ */
 export function listFeedFor(actor: Actor): PublicPost[] {
   assertActor(actor);
-  return (selectFeed.all(FEED_LIMIT) as FeedRow[]).map(toPublicPost);
+  const authorIds = [actor.userId, ...friendIdsFor(actor)];
+  const rows = selectFeedStatement(authorIds.length).all(
+    ...authorIds,
+    FEED_LIMIT,
+  ) as FeedRow[];
+  return rows.map(toPublicPost);
 }
 
 export function quotaFor(actor: Actor) {
@@ -149,19 +171,17 @@ export function nextAllowedAtFor(actor: Actor): number {
 
 /**
  * Resolves an upload filename to a path on disk, but only for a signed-in
- * actor and only when the file actually backs a post — a loose file dropped
- * into the uploads directory is not reachable.
- *
- * Under the current feed policy every member may read every member's photos,
- * so the actor is not narrowing the result today; it is the parameter a
- * narrower policy (followers-only, private posts) would filter on, and the
- * caller answers 404 either way so a rejection never confirms the file exists.
+ * actor, only when the file actually backs a post, and only when that post's
+ * author is the actor or one of their friends — the same audience as the
+ * feed itself. The caller answers 404 either way so a rejection never
+ * confirms the file exists.
  */
 export function resolvePhotoFor(actor: Actor, photoFile: string): string | null {
   assertActor(actor);
 
   const post = selectPhotoOwner.get(photoFile) as Pick<PostRow, "user_id"> | undefined;
   if (!post) return null;
+  if (post.user_id !== actor.userId && !friendIdsFor(actor).includes(post.user_id)) return null;
 
   return path.join(uploadsDir, photoFile);
 }
