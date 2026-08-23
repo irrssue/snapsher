@@ -20,37 +20,19 @@ type DiscoverableUser = {
 };
 
 /**
- * Placeholder rosters for design review. Wire these up to a real
- * /api/friends, /api/friends/requests, and /api/users search endpoints
- * once the layout is approved.
+ * TODO: wire these up to real /api/friends, /api/friends/requests, and
+ * /api/users search endpoints. Empty until then.
  */
-const MOCK_FRIENDS: Friend[] = [
-  { id: 1, username: "maya.codes", avatarUrl: null },
-  { id: 2, username: "jordan", avatarUrl: null },
-  { id: 5, username: "kenji", avatarUrl: null },
-];
-
-const MOCK_REQUESTS: FriendRequest[] = [
-  { id: 3, username: "sam_takes_photos", avatarUrl: null },
-  { id: 4, username: "riley", avatarUrl: null },
-];
-
-const MOCK_ALL_USERS: DiscoverableUser[] = [
-  { id: 1, username: "maya.codes", avatarUrl: null },
-  { id: 2, username: "jordan", avatarUrl: null },
-  { id: 5, username: "kenji", avatarUrl: null },
-  { id: 3, username: "sam_takes_photos", avatarUrl: null },
-  { id: 4, username: "riley", avatarUrl: null },
-  { id: 6, username: "priya", avatarUrl: null },
-  { id: 7, username: "devon.b", avatarUrl: null },
-];
+const NO_FRIENDS: Friend[] = [];
+const NO_REQUESTS: FriendRequest[] = [];
+const NO_USERS: DiscoverableUser[] = [];
 
 type SubTab = "friends" | "requests" | "add";
 
 export function FriendsTab() {
   const [subTab, setSubTab] = useState<SubTab>("friends");
-  const [friends, setFriends] = useState(MOCK_FRIENDS);
-  const [requests, setRequests] = useState(MOCK_REQUESTS);
+  const [friends, setFriends] = useState(NO_FRIENDS);
+  const [requests, setRequests] = useState(NO_REQUESTS);
   const [query, setQuery] = useState("");
   const [discoverQuery, setDiscoverQuery] = useState("");
   const [sentRequests, setSentRequests] = useState<number[]>([]);
@@ -63,7 +45,7 @@ export function FriendsTab() {
   }
 
   const trimmedDiscoverQuery = discoverQuery.trim().toLowerCase();
-  const discoverableUsers = MOCK_ALL_USERS.filter(
+  const discoverableUsers = NO_USERS.filter(
     (u) => !friendIds.has(u.id) && !requestIds.has(u.id)
   ).filter((u) => u.username.toLowerCase().includes(trimmedDiscoverQuery));
 
