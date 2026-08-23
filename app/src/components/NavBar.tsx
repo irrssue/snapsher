@@ -1,8 +1,11 @@
+import { PlusIcon } from "./icons";
+
 type View = "home" | "profile";
 
 type NavBarProps = {
   active: View;
   onChange: (view: View) => void;
+  onAddPost?: () => void;
 };
 
 const TABS: { key: View; label: string }[] = [
@@ -10,9 +13,9 @@ const TABS: { key: View; label: string }[] = [
   { key: "profile", label: "Profile" },
 ];
 
-export function NavBar({ active, onChange }: NavBarProps) {
+export function NavBar({ active, onChange, onAddPost }: NavBarProps) {
   return (
-    <nav className="flex justify-center pt-8">
+    <nav className="flex items-center justify-center gap-3 pt-8">
       <div className="flex gap-1 rounded-full bg-neutral-800 p-1">
         {TABS.map((tab) => (
           <button
@@ -29,6 +32,15 @@ export function NavBar({ active, onChange }: NavBarProps) {
           </button>
         ))}
       </div>
+
+      <button
+        type="button"
+        aria-label="Add post"
+        onClick={onAddPost}
+        className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-black transition-transform hover:scale-105"
+      >
+        <PlusIcon className="h-4 w-4" />
+      </button>
     </nav>
   );
 }
