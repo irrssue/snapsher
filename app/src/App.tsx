@@ -48,9 +48,9 @@ function App() {
       <button
         type="button"
         aria-label="Add post"
-        className="fixed bottom-8 left-1/2 -translate-x-1/2 flex h-[1.47rem] w-[1.47rem] items-center justify-center rounded-2xl bg-white text-black shadow-lg transition-transform hover:scale-105"
+        className="fixed bottom-8 left-1/2 -translate-x-1/2 flex h-[2.205rem] w-[2.205rem] items-center justify-center rounded-2xl bg-white text-black shadow-lg transition-transform hover:scale-105"
       >
-        <PlusIcon className="h-[0.63rem] w-[0.63rem]" />
+        <PlusIcon className="h-[0.945rem] w-[0.945rem]" />
       </button>
     </div>
   );
