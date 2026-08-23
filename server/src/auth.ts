@@ -102,7 +102,8 @@ async function upgradeHashIfStale(user: UserRow, password: string) {
 
 export const authRouter = Router();
 
-authRouter.use(express.json({ limit: "16kb" }));
+/** Small bodies only: credentials and a username, never a photo. */
+const smallJsonBody = express.json({ limit: "16kb" });
 
 /**
  * One request handles both halves of the email-first flow: known address plus
@@ -117,6 +118,7 @@ authRouter.use(express.json({ limit: "16kb" }));
 authRouter.post(
   "/continue",
   rateLimit(config.rateLimits.signIn),
+  smallJsonBody,
   asyncRoute(async (req, res) => {
     const { email, password } = req.body ?? {};
 
@@ -164,6 +166,7 @@ authRouter.post(
 authRouter.post(
   "/signup",
   rateLimit(config.rateLimits.signUp),
+  smallJsonBody,
   asyncRoute(async (req, res) => {
     const { username, email, password } = req.body ?? {};
 

@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { updateAvatar } from "../api/auth";
-import { readPhotoAsDataUrl } from "../api/posts";
+import { AvatarCropModal } from "./AvatarCropModal";
 import { PencilIcon, PersonIcon } from "./icons";
 import type { User } from "../types";
 
@@ -12,18 +12,28 @@ type ProfileAvatarProps = {
 export function ProfileAvatar({ user, onAvatarChange }: ProfileAvatarProps) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pickedImageUrl, setPickedImageUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     // Reset so picking the same file twice still fires a change event.
     e.target.value = "";
     if (!file) return;
 
     setError(null);
+    setPickedImageUrl(URL.createObjectURL(file));
+  }
+
+  function closeCropper() {
+    if (pickedImageUrl) URL.revokeObjectURL(pickedImageUrl);
+    setPickedImageUrl(null);
+  }
+
+  async function handleCropConfirm(photo: string) {
+    closeCropper();
     setUploading(true);
     try {
-      const photo = await readPhotoAsDataUrl(file);
       const updated = await updateAvatar(photo);
       onAvatarChange(updated);
     } catch (err) {
@@ -68,6 +78,14 @@ export function ProfileAvatar({ user, onAvatarChange }: ProfileAvatarProps) {
       />
 
       {error && <p className="text-center text-xs text-red-400">{error}</p>}
+
+      {pickedImageUrl && (
+        <AvatarCropModal
+          imageUrl={pickedImageUrl}
+          onCancel={closeCropper}
+          onConfirm={handleCropConfirm}
+        />
+      )}
     </div>
   );
 }
