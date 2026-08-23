@@ -32,7 +32,7 @@ export function PostCard({ post }: { post: Post }) {
         </div>
       </div>
 
-      <div className="order-1 flex h-64 w-64 shrink-0 items-center justify-center rounded-full bg-neutral-300 text-center text-sm text-neutral-600 md:order-2 md:h-72 md:w-72">
+      <div className="order-1 flex h-[19.2rem] w-[19.2rem] shrink-0 items-center justify-center rounded-full bg-neutral-300 text-center text-sm text-neutral-600 md:order-2 md:h-[21.6rem] md:w-[21.6rem]">
         {post.photoUrl ? (
           <img
             src={post.photoUrl}
