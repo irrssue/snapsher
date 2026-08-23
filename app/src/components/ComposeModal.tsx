@@ -114,11 +114,6 @@ export function ComposeModal({
               <HeartIcon className="h-6 w-6" />
               <CommentIcon className="h-6 w-6" />
             </div>
-
-            <p className="text-xs text-neutral-500">
-              Leave the description empty and your post will show just your
-              username and the photo.
-            </p>
           </div>
 
           <button
