@@ -1,6 +1,13 @@
 import type { Post } from "../types";
 import { HeartIcon, CommentIcon, PersonIcon } from "./icons";
 
+const postDateFormatter = new Intl.DateTimeFormat("en-US", {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+});
+
 export function PostCard({ post }: { post: Post }) {
   return (
     <div className="flex w-full flex-col gap-3 md:flex-row md:items-center md:justify-center md:gap-10">
@@ -43,6 +50,9 @@ export function PostCard({ post }: { post: Post }) {
           >
             <CommentIcon className="h-6 w-6" />
           </button>
+          <span className="ml-auto text-xs text-neutral-400">
+            {postDateFormatter.format(new Date(post.createdAt))}
+          </span>
         </div>
       </div>
 
