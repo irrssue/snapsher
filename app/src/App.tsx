@@ -64,9 +64,9 @@ function SignedInApp({
         onAddPost={() => setComposing(true)}
       />
 
-      <main className="flex justify-center px-6 py-24">
+      <main className="flex justify-center px-4 py-8 md:px-6 md:py-24">
         {view === "home" ? (
-          <div className="flex flex-col gap-16">
+          <div className="flex w-full max-w-md flex-col gap-10 md:max-w-none md:gap-16">
             {posts.map((post) => (
               <PostCard key={post.id} post={post} />
             ))}
@@ -77,7 +77,7 @@ function SignedInApp({
             )}
           </div>
         ) : (
-          <div className="flex flex-col items-center gap-8 pt-16">
+          <div className="flex w-full max-w-md flex-col items-center gap-8 pt-8 md:pt-16">
             <div className="h-24 w-24 rounded-full bg-neutral-300" />
             <span className="text-white">@{user.username}</span>
             <Countdown nextAllowedAt={nextAllowedAt} />

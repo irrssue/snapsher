@@ -15,7 +15,7 @@ const TABS: { key: View; label: string }[] = [
 
 export function NavBar({ active, onChange, onAddPost }: NavBarProps) {
   return (
-    <nav className="flex items-center justify-center gap-3 pt-8">
+    <nav className="flex items-center justify-center gap-3 px-4 pt-6 md:pt-8">
       <div className="flex gap-1 rounded-full bg-neutral-800 p-1">
         {TABS.map((tab) => (
           <button

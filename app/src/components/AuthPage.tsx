@@ -19,7 +19,7 @@ function AuthInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
-      className="w-56 rounded-full bg-neutral-400 px-5 py-2.5 text-sm text-white placeholder-white/90 outline-none"
+      className="w-full rounded-full bg-neutral-400 px-5 py-2.5 text-sm text-white placeholder-white/90 outline-none"
     />
   );
 }
@@ -46,7 +46,7 @@ export function AuthPage({
               password: String(formData.get("password") ?? ""),
             });
           }}
-          className="flex flex-col items-center gap-3"
+          className="flex w-full max-w-56 flex-col items-center gap-3"
         >
           <AuthInput
             type="email"
@@ -64,12 +64,12 @@ export function AuthPage({
             required
           />
 
-          {error && <p className="max-w-56 text-center text-xs text-red-400">{error}</p>}
+          {error && <p className="text-center text-xs text-red-400">{error}</p>}
 
           <button
             type="submit"
             disabled={submitting}
-            className="mt-4 w-56 rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             {submitting ? "Please wait…" : "Continue"}
           </button>
@@ -82,9 +82,9 @@ export function AuthPage({
             const formData = new FormData(e.currentTarget);
             onSubmitUsername(String(formData.get("username") ?? ""));
           }}
-          className="flex flex-col items-center gap-3"
+          className="flex w-full max-w-56 flex-col items-center gap-3"
         >
-          <p className="max-w-56 text-center text-xs text-neutral-400">
+          <p className="text-center text-xs text-neutral-400">
             No account found for <span className="text-white">{email}</span>. Pick a
             username to finish creating one.
           </p>
@@ -98,12 +98,12 @@ export function AuthPage({
             maxLength={20}
           />
 
-          {error && <p className="max-w-56 text-center text-xs text-red-400">{error}</p>}
+          {error && <p className="text-center text-xs text-red-400">{error}</p>}
 
           <button
             type="submit"
             disabled={submitting}
-            className="mt-4 w-56 rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             {submitting ? "Please wait…" : "Sign up"}
           </button>

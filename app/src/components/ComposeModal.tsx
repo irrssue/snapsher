@@ -64,7 +64,7 @@ export function ComposeModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-6 py-10"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-6 md:px-6 md:py-10"
       // A stray backdrop click shouldn't throw away a photo already picked —
       // those drafts have to be dismissed deliberately with Cancel.
       onClick={() => {
@@ -77,7 +77,7 @@ export function ComposeModal({
         aria-modal="true"
         aria-label="Share a photo"
         onClick={(e) => e.stopPropagation()}
-        className="max-h-full w-full max-w-3xl overflow-y-auto rounded-3xl bg-neutral-900 p-8"
+        className="max-h-full w-full max-w-md overflow-y-auto rounded-3xl bg-neutral-900 p-5 md:max-w-3xl md:p-8"
       >
         <div className="flex items-start justify-between">
           <p className="text-xs uppercase tracking-widest text-neutral-500">
@@ -94,8 +94,8 @@ export function ComposeModal({
           </button>
         </div>
 
-        <div className="mt-6 flex flex-col items-center gap-10 md:flex-row md:items-center md:justify-center">
-          <div className="order-2 flex w-64 flex-col gap-3 md:order-1">
+        <div className="mt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-center md:gap-10">
+          <div className="contents md:flex md:w-64 md:flex-col md:gap-3">
             <div className="flex items-center gap-2">
               <div className="h-8 w-8 shrink-0 rounded-full bg-neutral-300" />
               <span className="text-sm text-white">@{username}</span>
@@ -107,10 +107,10 @@ export function ComposeModal({
               maxLength={MAX_DESCRIPTION_LENGTH}
               rows={3}
               placeholder="Enter a description here"
-              className="resize-none rounded-2xl bg-neutral-800 px-4 py-3 text-sm text-neutral-200 placeholder-neutral-400 outline-none"
+              className="w-full resize-none rounded-2xl bg-neutral-800 px-4 py-3 text-sm text-neutral-200 placeholder-neutral-400 outline-none"
             />
 
-            <div className="flex items-center gap-3 text-white opacity-60">
+            <div className="order-1 flex items-center gap-3 text-white opacity-60 md:order-none">
               <HeartIcon className="h-6 w-6" />
               <CommentIcon className="h-6 w-6" />
             </div>
@@ -120,7 +120,7 @@ export function ComposeModal({
             type="button"
             onClick={() => fileInputRef.current?.click()}
             aria-label={photo ? "Change photo" : "Choose a photo"}
-            className="group order-1 flex h-[19.2rem] w-[19.2rem] shrink-0 items-center justify-center overflow-hidden rounded-3xl bg-neutral-300 md:order-2 md:h-[21.6rem] md:w-[21.6rem]"
+            className="group flex aspect-square w-full items-center justify-center overflow-hidden rounded-3xl bg-neutral-300 md:aspect-auto md:h-[21.6rem] md:w-[21.6rem] md:shrink-0"
           >
             {photo ? (
               <img
@@ -161,7 +161,7 @@ export function ComposeModal({
             type="button"
             onClick={handleShare}
             disabled={!photo || !canPost || sharing}
-            className="w-56 rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40"
+            className="w-full max-w-56 rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40"
           >
             {sharing ? "Sharing…" : "Share photo"}
           </button>
