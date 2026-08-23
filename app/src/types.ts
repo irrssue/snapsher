@@ -7,7 +7,13 @@ export type User = {
 export type Post = {
   id: string;
   username: string;
-  avatarUrl?: string;
-  photoUrl?: string;
-  description: string;
+  photoUrl: string;
+  /** Null when the author shared the photo without a description. */
+  description: string | null;
+  createdAt: number;
+};
+
+export type PostQuota = {
+  nextAllowedAt: number;
+  canPost: boolean;
 };

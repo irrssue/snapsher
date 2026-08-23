@@ -18,10 +18,32 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS posts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    description TEXT,
+    photo_file TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )
+`);
+
+db.exec(
+  "CREATE INDEX IF NOT EXISTS idx_posts_user_created ON posts (user_id, created_at DESC)",
+);
+
 export type UserRow = {
   id: number;
   username: string;
   email: string;
   password_hash: string;
   created_at: string;
+};
+
+export type PostRow = {
+  id: number;
+  user_id: number;
+  description: string | null;
+  photo_file: string;
+  created_at: number;
 };

@@ -10,9 +10,11 @@ export function PostCard({ post }: { post: Post }) {
           <span className="text-sm text-white">@{post.username}</span>
         </div>
 
-        <div className="whitespace-pre-line rounded-2xl bg-neutral-800 px-4 py-3 text-sm text-neutral-200">
-          {post.description}
-        </div>
+        {post.description && (
+          <div className="whitespace-pre-line rounded-2xl bg-neutral-800 px-4 py-3 text-sm text-neutral-200">
+            {post.description}
+          </div>
+        )}
 
         <div className="flex items-center gap-3 text-white">
           <button
@@ -32,16 +34,12 @@ export function PostCard({ post }: { post: Post }) {
         </div>
       </div>
 
-      <div className="order-1 flex h-[19.2rem] w-[19.2rem] shrink-0 items-center justify-center rounded-3xl bg-neutral-300 text-center text-sm text-neutral-600 md:order-2 md:h-[21.6rem] md:w-[21.6rem]">
-        {post.photoUrl ? (
-          <img
-            src={post.photoUrl}
-            alt={post.description}
-            className="h-full w-full rounded-3xl object-cover"
-          />
-        ) : (
-          "this will be PHOTO"
-        )}
+      <div className="order-1 h-[19.2rem] w-[19.2rem] shrink-0 overflow-hidden rounded-3xl bg-neutral-300 md:order-2 md:h-[21.6rem] md:w-[21.6rem]">
+        <img
+          src={post.photoUrl}
+          alt={post.description ?? `Photo shared by @${post.username}`}
+          className="h-full w-full object-cover"
+        />
       </div>
     </div>
   );

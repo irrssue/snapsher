@@ -1,6 +1,7 @@
 node_modules
 dist
 *.tsbuildinfo
+uploads
 data.db
 data.db-journal
 data.db-wal
