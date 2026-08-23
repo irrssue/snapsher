@@ -2,6 +2,7 @@ import { useState } from "react";
 import { NavBar } from "./components/NavBar";
 import { PostCard } from "./components/PostCard";
 import { Countdown } from "./components/Countdown";
+import { AuthPage, type AuthMode } from "./components/AuthPage";
 import type { Post } from "./types";
 
 const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
@@ -21,8 +22,20 @@ const SAMPLE_POSTS: Post[] = [
 ];
 
 function App() {
+  const [authed, setAuthed] = useState(false);
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [view, setView] = useState<"home" | "profile">("home");
   const [nextAllowedAt] = useState(() => Date.now() + TWELVE_HOURS_MS);
+
+  if (!authed) {
+    return (
+      <AuthPage
+        mode={authMode}
+        onModeChange={setAuthMode}
+        onSubmit={() => setAuthed(true)}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-black">
