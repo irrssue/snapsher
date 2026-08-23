@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavBar } from "./components/NavBar";
 import { PostCard } from "./components/PostCard";
+import { FriendsTab } from "./components/FriendsTab";
 import { Countdown } from "./components/Countdown";
 import { ComposeModal } from "./components/ComposeModal";
 import { ProfileAvatar } from "./components/ProfileAvatar";
@@ -28,7 +29,7 @@ function SignedInApp({
   onLogout: () => void;
   onAvatarChange: (user: User) => void;
 }) {
-  const [view, setView] = useState<"home" | "profile">("home");
+  const [view, setView] = useState<"home" | "friends" | "profile">("home");
   const [posts, setPosts] = useState<Post[]>([]);
   const [loadingFeed, setLoadingFeed] = useState(true);
   const [feedError, setFeedError] = useState<string | null>(null);
@@ -90,6 +91,8 @@ function SignedInApp({
               </p>
             )}
           </div>
+        ) : view === "friends" ? (
+          <FriendsTab />
         ) : (
           <div className="flex w-full max-w-md flex-col items-center gap-8 pt-8 md:pt-16">
             <ProfileAvatar user={user} onAvatarChange={onAvatarChange} />

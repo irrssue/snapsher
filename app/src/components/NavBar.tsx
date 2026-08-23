@@ -1,6 +1,6 @@
 import { PlusIcon } from "./icons";
 
-type View = "home" | "profile";
+type View = "home" | "friends" | "profile";
 
 type NavBarProps = {
   active: View;
@@ -10,6 +10,7 @@ type NavBarProps = {
 
 const TABS: { key: View; label: string }[] = [
   { key: "home", label: "Home" },
+  { key: "friends", label: "Friends" },
   { key: "profile", label: "Profile" },
 ];
 

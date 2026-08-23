@@ -91,6 +91,25 @@ export function CheckIcon({ className }: { className?: string }) {
   );
 }
 
+export function UserPlusIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <circle cx="9" cy="8" r="4" fill="currentColor" stroke="none" />
+      <path d="M2 20c0-4 3.1-6.5 7-6.5s7 2.5 7 6.5" />
+      <path d="M18 8v6M15 11h6" />
+    </svg>
+  );
+}
+
 export function CommentIcon({ className }: { className?: string }) {
   return (
     <svg
