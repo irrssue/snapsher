@@ -8,8 +8,9 @@ import {
   type AuthCredentialsData,
   type AuthStep,
 } from "./components/AuthPage";
-import { checkEmail, fetchCurrentUser, login, logout, signup } from "./api/auth";
+import { continueWithCredentials, fetchCurrentUser, logout, signup } from "./api/auth";
 import { createPost, fetchPosts, fetchQuota } from "./api/posts";
+import { onSessionExpired } from "./api/http";
 import type { Post, User } from "./types";
 
 /**
@@ -27,17 +28,24 @@ function SignedInApp({
   const [view, setView] = useState<"home" | "profile">("home");
   const [posts, setPosts] = useState<Post[]>([]);
   const [loadingFeed, setLoadingFeed] = useState(true);
-  const [nextAllowedAt, setNextAllowedAt] = useState(0);
+  const [feedError, setFeedError] = useState<string | null>(null);
+  /** Null means the posting window is unknown, not that posting is allowed. */
+  const [nextAllowedAt, setNextAllowedAt] = useState<number | null>(null);
   const [composing, setComposing] = useState(false);
 
   useEffect(() => {
     let active = true;
 
-    Promise.all([fetchPosts().catch(() => [] as Post[]), fetchQuota()])
+    Promise.all([fetchPosts(), fetchQuota()])
       .then(([nextPosts, quota]) => {
         if (!active) return;
         setPosts(nextPosts);
-        setNextAllowedAt(quota?.nextAllowedAt ?? 0);
+        setNextAllowedAt(quota.nextAllowedAt);
+        setFeedError(null);
+      })
+      .catch((err) => {
+        if (!active) return;
+        setFeedError(err instanceof Error ? err.message : "Couldn't load your feed.");
       })
       .finally(() => {
         if (active) setLoadingFeed(false);
@@ -70,7 +78,10 @@ function SignedInApp({
             {posts.map((post) => (
               <PostCard key={post.id} post={post} />
             ))}
-            {!loadingFeed && posts.length === 0 && (
+            {feedError && (
+              <p className="text-center text-sm text-red-400">{feedError}</p>
+            )}
+            {!loadingFeed && !feedError && posts.length === 0 && (
               <p className="text-center text-sm text-neutral-500">
                 Nothing shared yet. Tap + to share your photo.
               </p>
@@ -119,14 +130,29 @@ function App() {
       .finally(() => setCheckingSession(false));
   }, []);
 
+  /**
+   * A session can end while the app is open — it expires, or it's signed out
+   * elsewhere. Without this the UI keeps showing a signed-in shell whose every
+   * write fails, which is exactly how a dropped session used to surface: as
+   * "Not signed in." on the share button.
+   */
+  useEffect(() => {
+    const unsubscribe = onSessionExpired(() => {
+      setUser(null);
+      setAuthStep("credentials");
+      setPendingCredentials(null);
+      setAuthError("Your session has ended. Please sign in again.");
+    });
+    return () => unsubscribe();
+  }, []);
+
   async function handleCredentialsSubmit(data: AuthCredentialsData) {
     setAuthError(null);
     setAuthSubmitting(true);
     try {
-      const hasAccount = await checkEmail(data.email);
-      if (hasAccount) {
-        const loggedInUser = await login(data);
-        setUser(loggedInUser);
+      const result = await continueWithCredentials(data);
+      if ("user" in result) {
+        setUser(result.user);
       } else {
         setPendingCredentials(data);
         setAuthStep("username");
@@ -163,6 +189,7 @@ function App() {
     setUser(null);
     setAuthStep("credentials");
     setPendingCredentials(null);
+    setAuthError(null);
   }
 
   if (checkingSession) {

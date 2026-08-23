@@ -1,35 +1,26 @@
 import type { Post, PostQuota } from "../types";
-
-async function parseBody(res: Response) {
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(body.error || "Something went wrong. Please try again.");
-  }
-  return body;
-}
+import { api } from "./http";
 
 export async function fetchPosts(): Promise<Post[]> {
-  const res = await fetch("/api/posts", { credentials: "include" });
-  return (await parseBody(res)).posts;
+  const { posts } = await api<{ posts: Post[] }>("/api/posts");
+  return posts;
 }
 
-export async function fetchQuota(): Promise<PostQuota | null> {
-  const res = await fetch("/api/posts/quota", { credentials: "include" });
-  if (!res.ok) return null;
-  return res.json();
+export async function fetchQuota(): Promise<PostQuota> {
+  // Deliberately not swallowing failures: a quota that silently fell back to
+  // "you can post now" is what hid a broken session until the share button was
+  // already pressed.
+  return api<PostQuota>("/api/posts/quota");
 }
 
 export async function createPost(input: {
   photo: string;
   description: string;
 }): Promise<{ post: Post; nextAllowedAt: number }> {
-  const res = await fetch("/api/posts", {
+  return api<{ post: Post; nextAllowedAt: number }>("/api/posts", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify(input),
+    body: input,
   });
-  return parseBody(res);
 }
 
 const MAX_EDGE = 1440;

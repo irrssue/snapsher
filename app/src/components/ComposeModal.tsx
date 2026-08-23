@@ -7,7 +7,8 @@ const MAX_DESCRIPTION_LENGTH = 300;
 
 type ComposeModalProps = {
   username: string;
-  nextAllowedAt: number;
+  /** Null when the posting window couldn't be read — treated as "not yet". */
+  nextAllowedAt: number | null;
   onClose: () => void;
   onShare: (input: { photo: string; description: string }) => Promise<void>;
 };
@@ -19,7 +20,7 @@ export function ComposeModal({
   onShare,
 }: ComposeModalProps) {
   const now = useNow();
-  const canPost = now >= nextAllowedAt;
+  const canPost = nextAllowedAt !== null && now >= nextAllowedAt;
   const [photo, setPhoto] = useState<string | null>(null);
   const [description, setDescription] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -147,14 +148,20 @@ export function ComposeModal({
         <div className="mt-8 flex flex-col items-center gap-3">
           {error && <p className="text-center text-xs text-red-400">{error}</p>}
 
-          {!canPost && (
+          {nextAllowedAt === null ? (
             <p className="text-center text-xs text-neutral-400">
-              You've already shared a photo. Next one in{" "}
-              <span className="font-mono text-neutral-200">
-                {formatRemaining(nextAllowedAt - now)}
-              </span>
-              .
+              Couldn't check your posting window. Refresh and try again.
             </p>
+          ) : (
+            !canPost && (
+              <p className="text-center text-xs text-neutral-400">
+                You've already shared a photo. Next one in{" "}
+                <span className="font-mono text-neutral-200">
+                  {formatRemaining(nextAllowedAt - now)}
+                </span>
+                .
+              </p>
+            )
           )}
 
           <button

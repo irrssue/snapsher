@@ -11,6 +11,12 @@ export default defineConfig({
         target: "http://localhost:4000",
         changeOrigin: true,
       },
+      // Photos are no longer plain static files — they're served by the API
+      // behind a session check, so dev has to proxy them too.
+      "/uploads": {
+        target: "http://localhost:4000",
+        changeOrigin: true,
+      },
     },
   },
 })

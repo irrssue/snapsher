@@ -1,7 +1,19 @@
 import { formatRemaining, useNow } from "../time";
 
-export function Countdown({ nextAllowedAt }: { nextAllowedAt: number }) {
-  const remaining = nextAllowedAt - useNow();
+export function Countdown({ nextAllowedAt }: { nextAllowedAt: number | null }) {
+  const now = useNow();
+
+  // Null means the window couldn't be read, which is not the same as "go
+  // ahead" — saying so beats counting down from a number we don't have.
+  if (nextAllowedAt === null) {
+    return (
+      <span className="text-sm text-neutral-400">
+        Couldn't check your posting window.
+      </span>
+    );
+  }
+
+  const remaining = nextAllowedAt - now;
   const canPost = remaining <= 0;
 
   return (

@@ -1,103 +1,184 @@
-import { Router } from "express";
+import express, { Router } from "express";
 import bcrypt from "bcryptjs";
+import { config } from "./config.js";
 import { db, type UserRow } from "./db.js";
+import { createLockout, rateLimit, rejectLocked } from "./rateLimit.js";
+import { endSession, requireAuth, startSession, toPublicUser } from "./sessions.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
+const MAX_EMAIL_LENGTH = 254;
+const MIN_PASSWORD_LENGTH = 8;
+/** bcrypt only reads the first 72 bytes; the cap keeps the rest from being a silent lie. */
+const MAX_PASSWORD_LENGTH = 128;
 
-function toPublicUser(user: UserRow) {
-  return { id: user.id, username: user.username, email: user.email };
+/**
+ * Compared against when no account matches, so a sign-in attempt for an
+ * unknown address costs the same time as one for a real address. Without it
+ * the response time alone answers "does this email have an account?".
+ */
+const DUMMY_HASH = bcrypt.hashSync("password-that-never-matches", config.bcryptCost);
+
+const INVALID_CREDENTIALS = {
+  error: "Invalid email or password.",
+  code: "invalid_credentials",
+} as const;
+
+const lockout = createLockout(config.rateLimits.accountLockout);
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function findUserByEmail(email: string): UserRow | undefined {
+  return db.prepare("SELECT * FROM users WHERE email = ? COLLATE NOCASE").get(email) as
+    | UserRow
+    | undefined;
+}
+
+type PasswordCheck = { ok: true; value: string } | { ok: false; error: string };
+
+function validatePassword(password: unknown): PasswordCheck {
+  if (typeof password !== "string" || password.length < MIN_PASSWORD_LENGTH) {
+    return { ok: false, error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` };
+  }
+  if (password.length > MAX_PASSWORD_LENGTH) {
+    return { ok: false, error: `Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.` };
+  }
+  return { ok: true, value: password };
+}
+
+async function verifyPassword(password: string, hash: string): Promise<boolean> {
+  try {
+    return await bcrypt.compare(password, hash);
+  } catch {
+    return false;
+  }
+}
+
+/** Quietly moves an old low-cost hash up to the current cost on a good sign-in. */
+async function upgradeHashIfStale(user: UserRow, password: string) {
+  const cost = Number(user.password_hash.split("$")[2]);
+  if (!Number.isFinite(cost) || cost >= config.bcryptCost) return;
+  try {
+    const rehashed = await bcrypt.hash(password, config.bcryptCost);
+    db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(rehashed, user.id);
+  } catch (err) {
+    console.warn("[auth] password hash upgrade failed", err);
+  }
 }
 
 export const authRouter = Router();
 
-authRouter.post("/check-email", (req, res) => {
-  const { email } = req.body ?? {};
+authRouter.use(express.json({ limit: "16kb" }));
 
-  if (typeof email !== "string" || !EMAIL_RE.test(email)) {
-    return res.status(400).json({ error: "Enter a valid email address." });
-  }
+/**
+ * One request handles both halves of the email-first flow: known address plus
+ * correct password signs in, unknown address advances to the username step.
+ *
+ * That an address is unknown is unavoidably observable — the flow's entire
+ * premise is telling the user which branch they're on. Folding the check into
+ * the password step at least means enumeration costs a full sign-in attempt
+ * and is bounded by the same limiter, instead of sitting behind a free,
+ * password-less endpoint that could be walked through a mailing list.
+ */
+authRouter.post(
+  "/continue",
+  rateLimit(config.rateLimits.signIn),
+  async (req, res) => {
+    const { email, password } = req.body ?? {};
 
-  const existing = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
-  res.json({ exists: Boolean(existing) });
-});
+    if (typeof email !== "string" || email.length > MAX_EMAIL_LENGTH || !EMAIL_RE.test(email.trim())) {
+      return res.status(400).json({ error: "Enter a valid email address." });
+    }
+    if (typeof password !== "string" || password.length === 0) {
+      return res.status(400).json({ error: "Enter your password." });
+    }
+    if (password.length > MAX_PASSWORD_LENGTH) {
+      return res.status(401).json(INVALID_CREDENTIALS);
+    }
 
-authRouter.post("/signup", async (req, res) => {
+    const normalized = normalizeEmail(email);
+
+    const lockedFor = lockout.retryAfterMs(normalized);
+    if (lockedFor > 0) return rejectLocked(res, lockedFor);
+
+    const user = findUserByEmail(normalized);
+    if (!user) {
+      // Keep the timing in line with the branch that does hash a password.
+      await verifyPassword(password, DUMMY_HASH);
+      return res.json({ needsUsername: true });
+    }
+
+    if (!(await verifyPassword(password, user.password_hash))) {
+      lockout.recordFailure(normalized);
+      return res.status(401).json(INVALID_CREDENTIALS);
+    }
+
+    lockout.clear(normalized);
+    await upgradeHashIfStale(user, password);
+    startSession(req, res, user.id);
+    res.json({ user: toPublicUser(user) });
+  },
+);
+
+authRouter.post("/signup", rateLimit(config.rateLimits.signUp), async (req, res) => {
   const { username, email, password } = req.body ?? {};
 
-  if (typeof username !== "string" || !USERNAME_RE.test(username)) {
+  if (typeof username !== "string" || !USERNAME_RE.test(username.trim())) {
     return res.status(400).json({
       error: "Username must be 3-20 characters and contain only letters, numbers, and underscores.",
     });
   }
-  if (typeof email !== "string" || !EMAIL_RE.test(email)) {
+  if (typeof email !== "string" || email.length > MAX_EMAIL_LENGTH || !EMAIL_RE.test(email.trim())) {
     return res.status(400).json({ error: "Enter a valid email address." });
   }
-  if (typeof password !== "string" || password.length < 8) {
-    return res.status(400).json({ error: "Password must be at least 8 characters." });
+
+  const checked = validatePassword(password);
+  if (!checked.ok) return res.status(400).json({ error: checked.error });
+
+  const trimmedUsername = username.trim();
+  const normalizedEmail = normalizeEmail(email);
+  const lowerPassword = checked.value.toLowerCase();
+
+  if (
+    lowerPassword.includes(trimmedUsername.toLowerCase()) ||
+    lowerPassword.includes(normalizedEmail.split("@")[0])
+  ) {
+    return res.status(400).json({
+      error: "Choose a password that doesn't contain your username or email address.",
+    });
   }
 
   const existing = db
-    .prepare("SELECT id FROM users WHERE email = ? OR username = ?")
-    .get(email, username);
+    .prepare("SELECT id FROM users WHERE email = ? COLLATE NOCASE OR username = ? COLLATE NOCASE")
+    .get(normalizedEmail, trimmedUsername);
   if (existing) {
     return res.status(409).json({ error: "Username or email is already taken." });
   }
 
-  const passwordHash = await bcrypt.hash(password, 10);
-  const result = db
-    .prepare("INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)")
-    .run(username, email, passwordHash);
+  const passwordHash = await bcrypt.hash(checked.value, config.bcryptCost);
 
-  const user = db
-    .prepare("SELECT * FROM users WHERE id = ?")
-    .get(result.lastInsertRowid) as UserRow;
+  let user: UserRow;
+  try {
+    const result = db
+      .prepare("INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)")
+      .run(trimmedUsername, normalizedEmail, passwordHash);
+    user = db.prepare("SELECT * FROM users WHERE id = ?").get(result.lastInsertRowid) as UserRow;
+  } catch {
+    // Lost the race against a simultaneous signup on the same unique column.
+    return res.status(409).json({ error: "Username or email is already taken." });
+  }
 
-  req.session = { userId: user.id };
+  startSession(req, res, user.id);
   res.status(201).json({ user: toPublicUser(user) });
 });
 
-authRouter.post("/login", async (req, res) => {
-  const { email, password } = req.body ?? {};
-
-  if (typeof email !== "string" || typeof password !== "string") {
-    return res.status(400).json({ error: "Email and password are required." });
-  }
-
-  const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as
-    | UserRow
-    | undefined;
-  if (!user) {
-    return res.status(401).json({ error: "Invalid email or password." });
-  }
-
-  const valid = await bcrypt.compare(password, user.password_hash);
-  if (!valid) {
-    return res.status(401).json({ error: "Invalid email or password." });
-  }
-
-  req.session = { userId: user.id };
-  res.json({ user: toPublicUser(user) });
-});
-
 authRouter.post("/logout", (req, res) => {
-  req.session = null;
+  endSession(req, res);
   res.status(204).end();
 });
 
-authRouter.get("/me", (req, res) => {
-  const userId = req.session?.userId;
-  if (!userId) {
-    return res.status(401).json({ error: "Not signed in." });
-  }
-
-  const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as
-    | UserRow
-    | undefined;
-  if (!user) {
-    req.session = null;
-    return res.status(401).json({ error: "Not signed in." });
-  }
-
-  res.json({ user: toPublicUser(user) });
+authRouter.get("/me", requireAuth, (req, res) => {
+  res.json({ user: req.auth!.user });
 });

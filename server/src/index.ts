@@ -2,54 +2,85 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
-import cookieSession from "cookie-session";
+import { config } from "./config.js";
 import { authRouter } from "./auth.js";
-import { postsRouter, uploadsDir } from "./posts.js";
+import { postsRouter, uploadsRouter } from "./posts.js";
+import { rateLimit } from "./rateLimit.js";
+import { attachSession, requireCsrfToken, startSessionSweeper } from "./sessions.js";
+import { enforceTrustedOrigin, errorHandler, notFound, securityHeaders } from "./security.js";
 
 const app = express();
-const PORT = Number(process.env.PORT) || 4000;
-const isProd = process.env.NODE_ENV === "production";
 
-app.use(
-  cors({
-    origin: process.env.CLIENT_ORIGIN || "http://localhost:5173",
-    credentials: true,
-  }),
-);
-// Photos arrive as base64 data URLs in the JSON body, so the default 100kb cap
-// is far too small.
-app.use(express.json({ limit: "12mb" }));
-app.use(
-  cookieSession({
-    name: "session",
-    keys: [process.env.SESSION_SECRET || "dev-secret-change-me"],
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-    httpOnly: true,
-    sameSite: "lax",
-    secure: isProd,
-  }),
-);
+// Don't advertise the stack in every response.
+app.disable("x-powered-by");
+if (config.trustProxy) app.set("trust proxy", config.trustProxy);
+
+app.use(securityHeaders);
+
+// Production serves the SPA from this same origin, so CORS only has work to do
+// when a separate dev origin is configured.
+if (config.clientOrigins.length > 0) {
+  app.use(
+    cors({
+      origin: config.clientOrigins,
+      credentials: true,
+      methods: ["GET", "POST", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "X-CSRF-Token"],
+      maxAge: 600,
+    }),
+  );
+}
+
+/**
+ * Everything dynamic sits behind this chain, in this order: count the request,
+ * resolve who is making it, then prove it came from our own front end before
+ * any handler — or any body parser — sees it. Static assets skip the chain so a
+ * page full of images can't spend a user's rate-limit budget.
+ */
+const dynamicPaths = ["/api", "/uploads"];
+app.use(dynamicPaths, rateLimit(config.rateLimits.api));
+app.use(dynamicPaths, attachSession);
+app.use(dynamicPaths, enforceTrustedOrigin);
+app.use(dynamicPaths, requireCsrfToken);
 
 app.use("/api/auth", authRouter);
 app.use("/api/posts", postsRouter);
-
-app.use("/uploads", express.static(uploadsDir, { immutable: true, maxAge: "1y" }));
+app.use("/uploads", uploadsRouter);
 
 // Unmatched API and photo requests must 404 rather than fall through to the
 // SPA fallback below, which would answer them with index.html.
-app.use(["/api", "/uploads"], (_req, res) => {
-  res.status(404).json({ error: "Not found." });
-});
+app.use(dynamicPaths, notFound);
 
-if (isProd) {
+if (config.isProd) {
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const staticDir = path.join(__dirname, "../../app/dist");
-  app.use(express.static(staticDir));
+
+  app.use(
+    express.static(staticDir, {
+      index: false,
+      maxAge: "1y",
+      setHeaders(res, filePath) {
+        // Asset filenames are content-hashed; index.html is not, and a stale
+        // one would pin users to a deleted bundle.
+        if (filePath.endsWith(".html")) res.setHeader("Cache-Control", "no-cache");
+      },
+    }),
+  );
+
   app.get("*", (_req, res) => {
+    res.setHeader("Cache-Control", "no-cache");
     res.sendFile(path.join(staticDir, "index.html"));
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`Server listening on http://localhost:${PORT}`);
+app.use(errorHandler);
+
+startSessionSweeper();
+
+app.listen(config.port, () => {
+  console.log(
+    `Server listening on http://localhost:${config.port} ` +
+      `(${config.isProd ? "production" : "development"}, ` +
+      `secure cookies ${config.cookieSecure ? "on" : "off"})`,
+  );
 });

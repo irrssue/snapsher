@@ -1,149 +1,184 @@
-import { Router } from "express";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { db, type PostRow } from "./db.js";
+import express, { Router } from "express";
+import { config } from "./config.js";
+import { rateLimit } from "./rateLimit.js";
+import { requireAuth } from "./sessions.js";
+import {
+  createPostFor,
+  listFeedFor,
+  nextAllowedAtFor,
+  quotaFor,
+  QuotaExceededError,
+  resolvePhotoFor,
+  uploadsDir,
+  type Actor,
+} from "./postsStore.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+export { uploadsDir };
 
-export const uploadsDir = path.join(__dirname, "..", "uploads");
-fs.mkdirSync(uploadsDir, { recursive: true });
-
-/** One photo per 12 hours — the whole point of the product, enforced here. */
-const POST_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const MAX_DESCRIPTION_LENGTH = 300;
 const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
 
 const PHOTO_DATA_URL_RE = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$/;
-const EXTENSION_BY_FORMAT: Record<string, string> = {
+
+type PhotoFormat = "jpeg" | "png" | "webp";
+
+const EXTENSION_BY_FORMAT: Record<PhotoFormat, string> = {
   jpeg: "jpg",
   png: "png",
   webp: "webp",
 };
-
-type FeedRow = Pick<PostRow, "id" | "description" | "photo_file" | "created_at"> & {
-  username: string;
+const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
+  jpg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
 };
 
-function toPublicPost(row: FeedRow) {
-  return {
-    id: String(row.id),
-    username: row.username,
-    // Posts shared without a description have none at all — the client drops
-    // the description bubble entirely rather than rendering an empty one.
-    description: row.description,
-    photoUrl: `/uploads/${row.photo_file}`,
-    createdAt: row.created_at,
-  };
+/** Only ever a UUID plus one of our three extensions — no path separators, no dots. */
+const PHOTO_FILE_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|webp)$/;
+
+/**
+ * Reads the format out of the bytes themselves. The declared `data:image/...`
+ * prefix is attacker-controlled, so trusting it would let anything at all —
+ * an HTML file, a script — be stored under an image extension and later served
+ * back from our own origin.
+ */
+function sniffFormat(bytes: Buffer): PhotoFormat | null {
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "jpeg";
+  }
+  if (
+    bytes.length >= 8 &&
+    bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  ) {
+    return "png";
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes.subarray(0, 4).toString("latin1") === "RIFF" &&
+    bytes.subarray(8, 12).toString("latin1") === "WEBP"
+  ) {
+    return "webp";
+  }
+  return null;
 }
 
-function nextAllowedAt(userId: number) {
-  const lastPost = db
-    .prepare("SELECT created_at FROM posts WHERE user_id = ? ORDER BY created_at DESC LIMIT 1")
-    .get(userId) as Pick<PostRow, "created_at"> | undefined;
-
-  return lastPost ? lastPost.created_at + POST_INTERVAL_MS : 0;
+function actorOf(req: express.Request): Actor {
+  return { userId: req.auth!.user.id };
 }
 
 export const postsRouter = Router();
 
-postsRouter.get("/", (_req, res) => {
-  const rows = db
-    .prepare(
-      `SELECT posts.id, posts.description, posts.photo_file, posts.created_at, users.username
-       FROM posts
-       JOIN users ON users.id = posts.user_id
-       ORDER BY posts.created_at DESC
-       LIMIT 100`,
-    )
-    .all() as FeedRow[];
+postsRouter.use(requireAuth);
 
-  res.json({ posts: rows.map(toPublicPost) });
+postsRouter.get("/", (req, res) => {
+  res.json({ posts: listFeedFor(actorOf(req)) });
 });
 
 postsRouter.get("/quota", (req, res) => {
-  const userId = req.session?.userId;
-  if (!userId) {
-    return res.status(401).json({ error: "Not signed in." });
-  }
-
-  const allowedAt = nextAllowedAt(userId);
-  res.json({ nextAllowedAt: allowedAt, canPost: Date.now() >= allowedAt });
+  res.json(quotaFor(actorOf(req)));
 });
 
-postsRouter.post("/", (req, res) => {
-  const userId = req.session?.userId;
-  if (!userId) {
-    return res.status(401).json({ error: "Not signed in." });
-  }
+postsRouter.post(
+  "/",
+  rateLimit(config.rateLimits.createPost),
+  // Photos arrive as base64 data URLs in the JSON body, so this one route gets
+  // a much larger cap than the 16kb the rest of the API accepts.
+  express.json({ limit: "12mb" }),
+  (req, res) => {
+    const actor = actorOf(req);
+    const { photo, description } = req.body ?? {};
 
-  const { photo, description } = req.body ?? {};
+    if (typeof photo !== "string") {
+      return res.status(400).json({ error: "A photo is required." });
+    }
 
-  if (typeof photo !== "string") {
-    return res.status(400).json({ error: "A photo is required." });
-  }
+    const match = PHOTO_DATA_URL_RE.exec(photo);
+    if (!match) {
+      return res.status(400).json({ error: "That file isn't a supported image." });
+    }
 
-  const match = PHOTO_DATA_URL_RE.exec(photo);
-  if (!match) {
-    return res.status(400).json({ error: "That file isn't a supported image." });
-  }
+    if (description != null && typeof description !== "string") {
+      return res.status(400).json({ error: "Description must be text." });
+    }
+    const trimmedDescription = typeof description === "string" ? description.trim() : "";
+    if (trimmedDescription.length > MAX_DESCRIPTION_LENGTH) {
+      return res
+        .status(400)
+        .json({ error: `Description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer.` });
+    }
 
-  if (description != null && typeof description !== "string") {
-    return res.status(400).json({ error: "Description must be text." });
-  }
-  const trimmedDescription = typeof description === "string" ? description.trim() : "";
-  if (trimmedDescription.length > MAX_DESCRIPTION_LENGTH) {
-    return res
-      .status(400)
-      .json({ error: `Description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer.` });
-  }
+    // Reject an over-quota post before spending anything on decoding or disk.
+    const allowedAt = nextAllowedAtFor(actor);
+    if (Date.now() < allowedAt) {
+      return res.status(429).json({
+        error: "You've already shared a photo in the last 12 hours.",
+        nextAllowedAt: allowedAt,
+      });
+    }
 
-  const allowedAt = nextAllowedAt(userId);
-  if (Date.now() < allowedAt) {
-    return res.status(429).json({
-      error: "You've already shared a photo in the last 12 hours.",
-      nextAllowedAt: allowedAt,
-    });
-  }
+    const [, declaredFormat, base64] = match;
+    const bytes = Buffer.from(base64, "base64");
+    if (bytes.byteLength === 0) {
+      return res.status(400).json({ error: "That photo appears to be empty." });
+    }
+    if (bytes.byteLength > MAX_PHOTO_BYTES) {
+      return res.status(413).json({ error: "That photo is too large." });
+    }
+    if (sniffFormat(bytes) !== declaredFormat) {
+      return res.status(400).json({ error: "That file isn't a supported image." });
+    }
 
-  const [, format, base64] = match;
-  const bytes = Buffer.from(base64, "base64");
-  if (bytes.byteLength === 0) {
-    return res.status(400).json({ error: "That photo appears to be empty." });
-  }
-  if (bytes.byteLength > MAX_PHOTO_BYTES) {
-    return res.status(413).json({ error: "That photo is too large." });
-  }
+    const photoFile = `${crypto.randomUUID()}.${EXTENSION_BY_FORMAT[declaredFormat as PhotoFormat]}`;
+    const photoPath = path.join(uploadsDir, photoFile);
+    fs.writeFileSync(photoPath, bytes, { mode: 0o640 });
 
-  const photoFile = `${crypto.randomUUID()}.${EXTENSION_BY_FORMAT[format]}`;
-  fs.writeFileSync(path.join(uploadsDir, photoFile), bytes);
+    try {
+      const created = createPostFor(actor, {
+        description: trimmedDescription || null,
+        photoFile,
+      });
+      res.status(201).json(created);
+    } catch (err) {
+      // Don't leave an orphaned file behind if the row never landed.
+      fs.rmSync(photoPath, { force: true });
 
-  const createdAt = Date.now();
-  let result;
-  try {
-    result = db
-      .prepare(
-        "INSERT INTO posts (user_id, description, photo_file, created_at) VALUES (?, ?, ?, ?)",
-      )
-      .run(userId, trimmedDescription || null, photoFile, createdAt);
-  } catch (err) {
-    // Don't leave an orphaned file behind if the row never landed.
-    fs.rmSync(path.join(uploadsDir, photoFile), { force: true });
-    throw err;
-  }
+      if (err instanceof QuotaExceededError) {
+        return res.status(429).json({
+          error: "You've already shared a photo in the last 12 hours.",
+          nextAllowedAt: err.nextAllowedAt,
+        });
+      }
+      throw err;
+    }
+  },
+);
 
-  const row = db
-    .prepare(
-      `SELECT posts.id, posts.description, posts.photo_file, posts.created_at, users.username
-       FROM posts
-       JOIN users ON users.id = posts.user_id
-       WHERE posts.id = ?`,
-    )
-    .get(result.lastInsertRowid) as FeedRow;
+/**
+ * Photos are served through the app rather than as blind static files, so that
+ * reading one requires a session and goes through the same row-level check as
+ * the post it belongs to. Previously any URL-holder — signed in or not — could
+ * fetch every photo on the server.
+ */
+export const uploadsRouter = Router();
 
-  res.status(201).json({
-    post: toPublicPost(row),
-    nextAllowedAt: createdAt + POST_INTERVAL_MS,
+uploadsRouter.use(requireAuth);
+
+uploadsRouter.get("/:file", (req, res) => {
+  const file = req.params.file;
+  if (!PHOTO_FILE_RE.test(file)) return res.status(404).json({ error: "Not found." });
+
+  const photoPath = resolvePhotoFor(actorOf(req), file);
+  if (!photoPath) return res.status(404).json({ error: "Not found." });
+
+  res.type(CONTENT_TYPE_BY_EXTENSION[file.split(".").pop()!]);
+  res.setHeader("Content-Disposition", "inline");
+  // Content is immutable per filename, but it is nobody else's to cache.
+  res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+  res.sendFile(photoPath, { dotfiles: "deny" }, (err) => {
+    if (err && !res.headersSent) res.status(404).json({ error: "Not found." });
   });
 });
