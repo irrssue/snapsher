@@ -38,6 +38,14 @@ export async function logout(): Promise<void> {
   await api("/api/auth/logout", { method: "POST" }).catch(() => undefined);
 }
 
+export async function updateAvatar(photo: string): Promise<User> {
+  const { user } = await api<{ user: User }>("/api/auth/avatar", {
+    method: "PUT",
+    body: { photo },
+  });
+  return user;
+}
+
 export async function fetchCurrentUser(): Promise<User | null> {
   try {
     const { user } = await api<{ user: User }>("/api/auth/me", {

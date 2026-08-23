@@ -3,6 +3,7 @@ import type { CookieOptions, NextFunction, Request, RequestHandler, Response } f
 import { config } from "./config.js";
 import { db, type SessionRow, type UserRow } from "./db.js";
 import { SAFE_METHODS } from "./security.js";
+import { avatarUrlFor } from "./avatarsStore.js";
 
 const SESSION_COOKIE = "sid";
 /**
@@ -16,11 +17,21 @@ const CSRF_HEADER = "x-csrf-token";
 /** Cookies the previous cookie-session implementation left in browsers. */
 const LEGACY_COOKIES = ["session", "session.sig"];
 
-export type PublicUser = { id: number; username: string; email: string };
+export type PublicUser = {
+  id: number;
+  username: string;
+  email: string;
+  avatarUrl: string | null;
+};
 export type AuthContext = { user: PublicUser; session: SessionRow };
 
 export function toPublicUser(user: UserRow): PublicUser {
-  return { id: user.id, username: user.username, email: user.email };
+  return {
+    id: user.id,
+    username: user.username,
+    email: user.email,
+    avatarUrl: avatarUrlFor(user.avatar_file),
+  };
 }
 
 function hashToken(token: string): string {

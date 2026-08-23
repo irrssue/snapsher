@@ -3,6 +3,7 @@ import { NavBar } from "./components/NavBar";
 import { PostCard } from "./components/PostCard";
 import { Countdown } from "./components/Countdown";
 import { ComposeModal } from "./components/ComposeModal";
+import { ProfileAvatar } from "./components/ProfileAvatar";
 import {
   AuthPage,
   type AuthCredentialsData,
@@ -21,9 +22,11 @@ import type { Post, User } from "./types";
 function SignedInApp({
   user,
   onLogout,
+  onAvatarChange,
 }: {
   user: User;
   onLogout: () => void;
+  onAvatarChange: (user: User) => void;
 }) {
   const [view, setView] = useState<"home" | "profile">("home");
   const [posts, setPosts] = useState<Post[]>([]);
@@ -89,7 +92,7 @@ function SignedInApp({
           </div>
         ) : (
           <div className="flex w-full max-w-md flex-col items-center gap-8 pt-8 md:pt-16">
-            <div className="h-24 w-24 rounded-full bg-neutral-300" />
+            <ProfileAvatar user={user} onAvatarChange={onAvatarChange} />
             <span className="text-white">@{user.username}</span>
             <Countdown nextAllowedAt={nextAllowedAt} />
             <button
@@ -210,7 +213,14 @@ function App() {
     );
   }
 
-  return <SignedInApp key={user.id} user={user} onLogout={handleLogout} />;
+  return (
+    <SignedInApp
+      key={user.id}
+      user={user}
+      onLogout={handleLogout}
+      onAvatarChange={setUser}
+    />
+  );
 }
 
 export default App;

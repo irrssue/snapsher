@@ -1,3 +1,6 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import express, { Router } from "express";
 import bcrypt from "bcryptjs";
 import { config } from "./config.js";
@@ -5,6 +8,13 @@ import { db, type UserRow } from "./db.js";
 import { createLockout, rateLimit, rejectLocked } from "./rateLimit.js";
 import { asyncRoute } from "./security.js";
 import { endSession, requireAuth, startSession, toPublicUser } from "./sessions.js";
+import { avatarsDir } from "./avatarsStore.js";
+import {
+  EXTENSION_BY_FORMAT,
+  PHOTO_DATA_URL_RE,
+  sniffFormat,
+  type ImageFormat,
+} from "./images.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
@@ -218,3 +228,56 @@ authRouter.post("/logout", (req, res) => {
 authRouter.get("/me", requireAuth, (req, res) => {
   res.json({ user: req.auth!.user });
 });
+
+const MAX_AVATAR_BYTES = 4 * 1024 * 1024;
+
+authRouter.put(
+  "/avatar",
+  requireAuth,
+  rateLimit(config.rateLimits.updateAvatar),
+  // Arrives as a base64 data URL in the JSON body, same as a post's photo.
+  express.json({ limit: "6mb" }),
+  (req, res) => {
+    const { photo } = req.body ?? {};
+
+    if (typeof photo !== "string") {
+      return res.status(400).json({ error: "A photo is required." });
+    }
+
+    const match = PHOTO_DATA_URL_RE.exec(photo);
+    if (!match) {
+      return res.status(400).json({ error: "That file isn't a supported image." });
+    }
+
+    const [, declaredFormat, base64] = match;
+    const bytes = Buffer.from(base64, "base64");
+    if (bytes.byteLength === 0) {
+      return res.status(400).json({ error: "That photo appears to be empty." });
+    }
+    if (bytes.byteLength > MAX_AVATAR_BYTES) {
+      return res.status(413).json({ error: "That photo is too large." });
+    }
+    if (sniffFormat(bytes) !== declaredFormat) {
+      return res.status(400).json({ error: "That file isn't a supported image." });
+    }
+
+    const user = req.auth!.user;
+    const previousAvatarFile = (
+      db.prepare("SELECT avatar_file FROM users WHERE id = ?").get(user.id) as
+        | Pick<UserRow, "avatar_file">
+        | undefined
+    )?.avatar_file;
+
+    const avatarFile = `${crypto.randomUUID()}.${EXTENSION_BY_FORMAT[declaredFormat as ImageFormat]}`;
+    fs.writeFileSync(path.join(avatarsDir, avatarFile), bytes, { mode: 0o640 });
+
+    db.prepare("UPDATE users SET avatar_file = ? WHERE id = ?").run(avatarFile, user.id);
+
+    if (previousAvatarFile) {
+      fs.rmSync(path.join(avatarsDir, previousAvatarFile), { force: true });
+    }
+
+    const updated = db.prepare("SELECT * FROM users WHERE id = ?").get(user.id) as UserRow;
+    res.json({ user: toPublicUser(updated) });
+  },
+);

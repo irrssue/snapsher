@@ -15,54 +15,20 @@ import {
   uploadsDir,
   type Actor,
 } from "./postsStore.js";
+import {
+  CONTENT_TYPE_BY_EXTENSION,
+  EXTENSION_BY_FORMAT,
+  PHOTO_DATA_URL_RE,
+  sniffFormat,
+  type ImageFormat,
+} from "./images.js";
 
 const MAX_DESCRIPTION_LENGTH = 300;
 const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
 
-const PHOTO_DATA_URL_RE = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$/;
-
-type PhotoFormat = "jpeg" | "png" | "webp";
-
-const EXTENSION_BY_FORMAT: Record<PhotoFormat, string> = {
-  jpeg: "jpg",
-  png: "png",
-  webp: "webp",
-};
-const CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
-  jpg: "image/jpeg",
-  png: "image/png",
-  webp: "image/webp",
-};
-
 /** Only ever a UUID plus one of our three extensions — no path separators, no dots. */
 const PHOTO_FILE_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|webp)$/;
-
-/**
- * Reads the format out of the bytes themselves. The declared `data:image/...`
- * prefix is attacker-controlled, so trusting it would let anything at all —
- * an HTML file, a script — be stored under an image extension and later served
- * back from our own origin.
- */
-function sniffFormat(bytes: Buffer): PhotoFormat | null {
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
-    return "jpeg";
-  }
-  if (
-    bytes.length >= 8 &&
-    bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
-  ) {
-    return "png";
-  }
-  if (
-    bytes.length >= 12 &&
-    bytes.subarray(0, 4).toString("latin1") === "RIFF" &&
-    bytes.subarray(8, 12).toString("latin1") === "WEBP"
-  ) {
-    return "webp";
-  }
-  return null;
-}
 
 function actorOf(req: express.Request): Actor {
   return { userId: req.auth!.user.id };
@@ -130,7 +96,7 @@ postsRouter.post(
       return res.status(400).json({ error: "That file isn't a supported image." });
     }
 
-    const photoFile = `${crypto.randomUUID()}.${EXTENSION_BY_FORMAT[declaredFormat as PhotoFormat]}`;
+    const photoFile = `${crypto.randomUUID()}.${EXTENSION_BY_FORMAT[declaredFormat as ImageFormat]}`;
     const photoPath = path.join(uploadsDir, photoFile);
     fs.writeFileSync(photoPath, bytes, { mode: 0o640 });
 

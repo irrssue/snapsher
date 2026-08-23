@@ -27,6 +27,37 @@ export function PlusIcon({ className }: { className?: string }) {
   );
 }
 
+export function PersonIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className={className}
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7v.5c0 .3-.2.5-.5.5h-15c-.3 0-.5-.2-.5-.5V20Z" />
+    </svg>
+  );
+}
+
+export function PencilIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="m16.5 3.5 4 4L8 20H4v-4L16.5 3.5Z" />
+    </svg>
+  );
+}
+
 export function CommentIcon({ className }: { className?: string }) {
   return (
     <svg

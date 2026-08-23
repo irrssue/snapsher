@@ -20,9 +20,17 @@ db.exec(`
     username TEXT NOT NULL UNIQUE,
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
+    avatar_file TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )
 `);
+
+// SQLite has no `ADD COLUMN IF NOT EXISTS`, so a table created before avatars
+// existed needs this checked and applied by hand.
+const userColumns = db.prepare("PRAGMA table_info(users)").all() as { name: string }[];
+if (!userColumns.some((column) => column.name === "avatar_file")) {
+  db.exec("ALTER TABLE users ADD COLUMN avatar_file TEXT");
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS posts (
@@ -86,6 +94,7 @@ export type UserRow = {
   username: string;
   email: string;
   password_hash: string;
+  avatar_file: string | null;
   created_at: string;
 };
 

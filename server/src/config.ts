@@ -89,6 +89,7 @@ export const config = {
     signIn: { windowMs: 15 * MINUTE, max: 20 },
     signUp: { windowMs: HOUR, max: 5 },
     createPost: { windowMs: HOUR, max: 10 },
+    updateAvatar: { windowMs: HOUR, max: 20 },
   },
 
   /**
