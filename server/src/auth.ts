@@ -25,7 +25,8 @@ const INVALID_CREDENTIALS = {
   code: "invalid_credentials",
 } as const;
 
-const lockout = createLockout(config.rateLimits.accountLockout);
+const lockoutByIp = createLockout(config.lockout.perIp);
+const lockoutByAccount = createLockout(config.lockout.perAccount);
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
@@ -120,8 +121,12 @@ authRouter.post(
     }
 
     const normalized = normalizeEmail(email);
+    const perIpKey = `${normalized}|${req.ip ?? "unknown"}`;
 
-    const lockedFor = lockout.retryAfterMs(normalized);
+    const lockedFor = Math.max(
+      lockoutByIp.retryAfterMs(perIpKey),
+      lockoutByAccount.retryAfterMs(normalized),
+    );
     if (lockedFor > 0) return rejectLocked(res, lockedFor);
 
     const user = findUserByEmail(normalized);
@@ -132,11 +137,14 @@ authRouter.post(
     }
 
     if (!(await verifyPassword(password, user.password_hash))) {
-      lockout.recordFailure(normalized);
+      lockoutByIp.recordFailure(perIpKey);
+      lockoutByAccount.recordFailure(normalized);
       return res.status(401).json(INVALID_CREDENTIALS);
     }
 
-    lockout.clear(normalized);
+    // Only the address that proved the password gets its counter reset, so a
+    // successful sign-in can't be used to wipe an attacker's slate elsewhere.
+    lockoutByIp.clear(perIpKey);
     await upgradeHashIfStale(user, password);
     startSession(req, res, user.id);
     res.json({ user: toPublicUser(user) });

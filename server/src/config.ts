@@ -39,6 +39,15 @@ export const config = {
   port: envInt("PORT", 4000),
 
   /**
+   * In production the only thing that should be able to reach this process is
+   * the tunnel, which connects over loopback. Binding every interface left the
+   * plain-HTTP port answering on the LAN and the tailnet, where a request
+   * skips Cloudflare's TLS and everything in front of it. Development still
+   * binds broadly so the app can be opened from a phone on the same network.
+   */
+  host: process.env.HOST || (isProd ? "127.0.0.1" : ""),
+
+  /**
    * The homeserver reaches this process through a Cloudflare Tunnel that
    * connects over loopback, so trusting loopback (and nothing else) is what
    * turns `X-Forwarded-For` into a real client IP for rate limiting. Anything
@@ -80,8 +89,21 @@ export const config = {
     signIn: { windowMs: 15 * MINUTE, max: 20 },
     signUp: { windowMs: HOUR, max: 5 },
     createPost: { windowMs: HOUR, max: 10 },
-    /** Per-account throttle, layered on top of the per-IP one above. */
-    accountLockout: { maxFailures: 5, windowMs: 15 * MINUTE, lockMs: 15 * MINUTE },
+  },
+
+  /**
+   * Two layers, because a single account-wide lock is a weapon pointed at the
+   * account's owner: anyone who knows the address can burn five attempts and
+   * lock the real user out, repeatedly, even with the correct password.
+   *
+   * The tight lock is therefore scoped to one account *from one address*, so
+   * an attacker only locks themselves out. The account-wide lock survives as a
+   * much higher backstop against a distributed guessing campaign, at a
+   * threshold no ordinary person reaches by mistyping.
+   */
+  lockout: {
+    perIp: { maxFailures: 5, windowMs: 15 * MINUTE, lockMs: 15 * MINUTE },
+    perAccount: { maxFailures: 50, windowMs: HOUR, lockMs: HOUR },
   },
 } as const;
 

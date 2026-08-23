@@ -79,10 +79,16 @@ app.use(errorHandler);
 
 startSessionSweeper();
 
-app.listen(config.port, () => {
+function announce() {
   console.log(
-    `Server listening on http://localhost:${config.port} ` +
+    `Server listening on http://${config.host || "0.0.0.0"}:${config.port} ` +
       `(${config.isProd ? "production" : "development"}, ` +
       `secure cookies ${config.cookieSecure ? "on" : "off"})`,
   );
-});
+}
+
+if (config.host) {
+  app.listen(config.port, config.host, announce);
+} else {
+  app.listen(config.port, announce);
+}
