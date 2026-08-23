@@ -2,6 +2,7 @@ import { useState } from "react";
 import { NavBar } from "./components/NavBar";
 import { PostCard } from "./components/PostCard";
 import { Countdown } from "./components/Countdown";
+import { PlusIcon } from "./components/icons";
 import type { Post } from "./types";
 
 const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
@@ -43,6 +44,14 @@ function App() {
           </div>
         )}
       </main>
+
+      <button
+        type="button"
+        aria-label="Add post"
+        className="fixed bottom-8 left-1/2 -translate-x-1/2 flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-black shadow-lg transition-transform hover:scale-105"
+      >
+        <PlusIcon className="h-6 w-6" />
+      </button>
     </div>
   );
 }
