@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { NavBar } from "./components/NavBar";
 import { PostCard } from "./components/PostCard";
 import { Countdown } from "./components/Countdown";
-import { AuthPage, type AuthMode } from "./components/AuthPage";
-import type { Post } from "./types";
+import { AuthPage, type AuthMode, type AuthSubmitData } from "./components/AuthPage";
+import { fetchCurrentUser, login, logout, signup } from "./api/auth";
+import type { Post, User } from "./types";
 
 const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
 
@@ -22,17 +23,55 @@ const SAMPLE_POSTS: Post[] = [
 ];
 
 function App() {
-  const [authed, setAuthed] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [checkingSession, setCheckingSession] = useState(true);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authSubmitting, setAuthSubmitting] = useState(false);
   const [view, setView] = useState<"home" | "profile">("home");
   const [nextAllowedAt] = useState(() => Date.now() + TWELVE_HOURS_MS);
 
-  if (!authed) {
+  useEffect(() => {
+    fetchCurrentUser()
+      .then(setUser)
+      .finally(() => setCheckingSession(false));
+  }, []);
+
+  async function handleAuthSubmit(data: AuthSubmitData) {
+    setAuthError(null);
+    setAuthSubmitting(true);
+    try {
+      const loggedInUser =
+        authMode === "signup" ? await signup(data) : await login(data);
+      setUser(loggedInUser);
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
+
+  async function handleLogout() {
+    await logout();
+    setUser(null);
+    setView("home");
+  }
+
+  if (checkingSession) {
+    return <div className="min-h-screen bg-black" />;
+  }
+
+  if (!user) {
     return (
       <AuthPage
         mode={authMode}
-        onModeChange={setAuthMode}
-        onSubmit={() => setAuthed(true)}
+        onModeChange={(mode) => {
+          setAuthMode(mode);
+          setAuthError(null);
+        }}
+        onSubmit={handleAuthSubmit}
+        error={authError}
+        submitting={authSubmitting}
       />
     );
   }
@@ -51,8 +90,15 @@ function App() {
         ) : (
           <div className="flex flex-col items-center gap-8 pt-16">
             <div className="h-24 w-24 rounded-full bg-neutral-300" />
-            <span className="text-white">@username</span>
+            <span className="text-white">@{user.username}</span>
             <Countdown nextAllowedAt={nextAllowedAt} />
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="text-xs text-neutral-400 transition-colors hover:text-white"
+            >
+              Log out
+            </button>
           </div>
         )}
       </main>
