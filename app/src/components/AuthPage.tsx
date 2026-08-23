@@ -1,15 +1,16 @@
-export type AuthMode = "login" | "signup";
+export type AuthStep = "credentials" | "username";
 
-export type AuthSubmitData = {
-  username?: string;
+export type AuthCredentialsData = {
   email: string;
   password: string;
 };
 
 type AuthPageProps = {
-  mode: AuthMode;
-  onModeChange: (mode: AuthMode) => void;
-  onSubmit?: (data: AuthSubmitData) => void;
+  step: AuthStep;
+  email?: string;
+  onSubmitCredentials: (data: AuthCredentialsData) => void;
+  onSubmitUsername: (username: string) => void;
+  onBack: () => void;
   error?: string | null;
   submitting?: boolean;
 };
@@ -24,86 +25,95 @@ function AuthInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
 }
 
 export function AuthPage({
-  mode,
-  onModeChange,
-  onSubmit,
+  step,
+  email,
+  onSubmitCredentials,
+  onSubmitUsername,
+  onBack,
   error,
   submitting,
 }: AuthPageProps) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-black px-6">
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          const formData = new FormData(e.currentTarget);
-          const data: AuthSubmitData = {
-            email: String(formData.get("email") ?? ""),
-            password: String(formData.get("password") ?? ""),
-          };
-          if (mode === "signup") {
-            data.username = String(formData.get("username") ?? "");
-          }
-          onSubmit?.(data);
-        }}
-        className="flex flex-col items-center gap-3"
-      >
-        {mode === "signup" && (
+      {step === "credentials" ? (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const formData = new FormData(e.currentTarget);
+            onSubmitCredentials({
+              email: String(formData.get("email") ?? ""),
+              password: String(formData.get("password") ?? ""),
+            });
+          }}
+          className="flex flex-col items-center gap-3"
+        >
+          <AuthInput
+            type="email"
+            name="email"
+            placeholder="email"
+            autoComplete="email"
+            defaultValue={email}
+            required
+          />
+          <AuthInput
+            type="password"
+            name="password"
+            placeholder="Password"
+            autoComplete="current-password"
+            required
+          />
+
+          {error && <p className="max-w-56 text-center text-xs text-red-400">{error}</p>}
+
+          <button
+            type="submit"
+            disabled={submitting}
+            className="mt-4 w-56 rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-50"
+          >
+            {submitting ? "Please wait…" : "Continue"}
+          </button>
+        </form>
+      ) : (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const formData = new FormData(e.currentTarget);
+            onSubmitUsername(String(formData.get("username") ?? ""));
+          }}
+          className="flex flex-col items-center gap-3"
+        >
+          <p className="max-w-56 text-center text-xs text-neutral-400">
+            No account found for <span className="text-white">{email}</span>. Pick a
+            username to finish creating one.
+          </p>
           <AuthInput
             type="text"
             name="username"
             placeholder="username"
             autoComplete="username"
             required
+            minLength={3}
+            maxLength={20}
           />
-        )}
-        <AuthInput
-          type="email"
-          name="email"
-          placeholder="email"
-          autoComplete="email"
-          required
-        />
-        <AuthInput
-          type="password"
-          name="password"
-          placeholder="Password"
-          autoComplete={mode === "login" ? "current-password" : "new-password"}
-          minLength={mode === "signup" ? 8 : undefined}
-          required
-        />
 
-        {error && <p className="max-w-56 text-center text-xs text-red-400">{error}</p>}
+          {error && <p className="max-w-56 text-center text-xs text-red-400">{error}</p>}
 
-        <div className="mt-3 flex overflow-hidden rounded-full bg-neutral-300 text-xs font-medium tracking-wide text-black">
+          <button
+            type="submit"
+            disabled={submitting}
+            className="mt-4 w-56 rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-50"
+          >
+            {submitting ? "Please wait…" : "Sign up"}
+          </button>
           <button
             type="button"
-            onClick={() => onModeChange("login")}
-            className={`px-6 py-2 transition-colors ${
-              mode === "login" ? "bg-white" : "hover:bg-neutral-200"
-            }`}
+            onClick={onBack}
+            className="text-xs text-neutral-400 transition-colors hover:text-white"
           >
-            LOGIN
+            ← Use a different email
           </button>
-          <div className="w-px bg-neutral-500" />
-          <button
-            type="button"
-            onClick={() => onModeChange("signup")}
-            className={`px-5 py-2 transition-colors ${
-              mode === "signup" ? "bg-white" : "hover:bg-neutral-200"
-            }`}
-          >
-            SIGN UP
-          </button>
-        </div>
-
-        <button
-          type="submit"
-          disabled={submitting}
-          className="mt-1 w-56 rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-50"
-        >
-          {submitting ? "Please wait…" : mode === "login" ? "Log in" : "Sign up"}
-        </button>
-      </form>
+        </form>
+      )}
     </div>
   );
 }

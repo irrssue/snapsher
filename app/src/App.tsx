@@ -2,8 +2,12 @@ import { useEffect, useState } from "react";
 import { NavBar } from "./components/NavBar";
 import { PostCard } from "./components/PostCard";
 import { Countdown } from "./components/Countdown";
-import { AuthPage, type AuthMode, type AuthSubmitData } from "./components/AuthPage";
-import { fetchCurrentUser, login, logout, signup } from "./api/auth";
+import {
+  AuthPage,
+  type AuthCredentialsData,
+  type AuthStep,
+} from "./components/AuthPage";
+import { checkEmail, fetchCurrentUser, login, logout, signup } from "./api/auth";
 import type { Post, User } from "./types";
 
 const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
@@ -25,7 +29,9 @@ const SAMPLE_POSTS: Post[] = [
 function App() {
   const [user, setUser] = useState<User | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
-  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [authStep, setAuthStep] = useState<AuthStep>("credentials");
+  const [pendingCredentials, setPendingCredentials] =
+    useState<AuthCredentialsData | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [view, setView] = useState<"home" | "profile">("home");
@@ -37,18 +43,43 @@ function App() {
       .finally(() => setCheckingSession(false));
   }, []);
 
-  async function handleAuthSubmit(data: AuthSubmitData) {
+  async function handleCredentialsSubmit(data: AuthCredentialsData) {
     setAuthError(null);
     setAuthSubmitting(true);
     try {
-      const loggedInUser =
-        authMode === "signup" ? await signup(data) : await login(data);
-      setUser(loggedInUser);
+      const hasAccount = await checkEmail(data.email);
+      if (hasAccount) {
+        const loggedInUser = await login(data);
+        setUser(loggedInUser);
+      } else {
+        setPendingCredentials(data);
+        setAuthStep("username");
+      }
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
       setAuthSubmitting(false);
     }
+  }
+
+  async function handleUsernameSubmit(username: string) {
+    if (!pendingCredentials) return;
+    setAuthError(null);
+    setAuthSubmitting(true);
+    try {
+      const newUser = await signup({ ...pendingCredentials, username });
+      setUser(newUser);
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
+
+  function handleAuthBack() {
+    setAuthStep("credentials");
+    setPendingCredentials(null);
+    setAuthError(null);
   }
 
   async function handleLogout() {
@@ -64,12 +95,11 @@ function App() {
   if (!user) {
     return (
       <AuthPage
-        mode={authMode}
-        onModeChange={(mode) => {
-          setAuthMode(mode);
-          setAuthError(null);
-        }}
-        onSubmit={handleAuthSubmit}
+        step={authStep}
+        email={pendingCredentials?.email}
+        onSubmitCredentials={handleCredentialsSubmit}
+        onSubmitUsername={handleUsernameSubmit}
+        onBack={handleAuthBack}
         error={authError}
         submitting={authSubmitting}
       />

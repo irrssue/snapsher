@@ -14,6 +14,19 @@ async function parseResponse(res: Response): Promise<{ user: User }> {
   return body;
 }
 
+export async function checkEmail(email: string): Promise<boolean> {
+  const res = await fetch("/api/auth/check-email", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(body.error || "Something went wrong. Please try again.");
+  }
+  return Boolean(body.exists);
+}
+
 export async function signup(credentials: AuthCredentials): Promise<User> {
   const res = await fetch("/api/auth/signup", {
     method: "POST",

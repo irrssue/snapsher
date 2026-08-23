@@ -11,6 +11,17 @@ function toPublicUser(user: UserRow) {
 
 export const authRouter = Router();
 
+authRouter.post("/check-email", (req, res) => {
+  const { email } = req.body ?? {};
+
+  if (typeof email !== "string" || !EMAIL_RE.test(email)) {
+    return res.status(400).json({ error: "Enter a valid email address." });
+  }
+
+  const existing = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
+  res.json({ exists: Boolean(existing) });
+});
+
 authRouter.post("/signup", async (req, res) => {
   const { username, email, password } = req.body ?? {};
 
