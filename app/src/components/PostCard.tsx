@@ -44,6 +44,9 @@ export function PostCard({ post }: { post: Post }) {
         <img
           src={post.photoUrl}
           alt={post.description ?? `Photo shared by @${post.username}`}
+          // Photos are now fetched through an authenticated route, so a feed of
+          // 100 is 100 requests; only ask for the ones actually on screen.
+          loading="lazy"
           className="h-full w-full object-cover"
         />
       </div>

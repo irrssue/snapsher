@@ -6,9 +6,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Overridable so a test run can point at a throwaway file instead of the
 // database the homeserver is actually serving from.
-export const dbFile = process.env.DB_FILE || path.join(__dirname, "..", "data.db");
-
-export const db = new Database(dbFile);
+export const db = new Database(process.env.DB_FILE || path.join(__dirname, "..", "data.db"));
 
 db.pragma("journal_mode = WAL");
 // SQLite ignores REFERENCES clauses unless this is on, which quietly made every
@@ -58,18 +56,19 @@ db.exec(`
 db.exec(
   "CREATE INDEX IF NOT EXISTS idx_posts_user_created ON posts (user_id, created_at DESC)",
 );
-db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_photo_file ON posts (photo_file)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions (expires_at)");
 
 /**
- * `UNIQUE` on the columns themselves is case-sensitive, which would let
- * `Ada@example.com` register alongside `ada@example.com` and let one account
- * impersonate another by casing alone. Creating these fails on a database that
- * already contains such a pair, so a failure is reported and left for a human
- * rather than taking the server down at boot.
+ * Unique indexes that can fail on data that predates them, so each is reported
+ * and skipped rather than taking the server down at boot.
+ *
+ * The case-insensitive pair matters because `UNIQUE` on the column itself is
+ * case-sensitive, which would let `Ada@example.com` register alongside
+ * `ada@example.com` and let one account impersonate another by casing alone.
  */
 for (const [name, sql] of [
+  ["posts.photo_file", "CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_photo_file ON posts (photo_file)"],
   ["users.email", "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_nocase ON users (email COLLATE NOCASE)"],
   ["users.username", "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_nocase ON users (username COLLATE NOCASE)"],
 ] as const) {
@@ -77,7 +76,7 @@ for (const [name, sql] of [
     db.exec(sql);
   } catch {
     console.warn(
-      `[db] Could not add the case-insensitive unique index on ${name} — the table already holds rows that differ only by case. Resolve the duplicates and restart.`,
+      `[db] Could not add the unique index on ${name} — the table already holds duplicate rows. Resolve them and restart; until then uniqueness is not enforced there.`,
     );
   }
 }

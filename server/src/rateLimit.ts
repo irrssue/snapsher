@@ -19,10 +19,24 @@ function sweep(store: Map<string, { resetAt: number }>) {
   timer.unref();
 }
 
+const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+
 function clientKey(req: Request): string {
   // `req.ip` is only trustworthy because of the narrow `trust proxy` setting;
   // see config.ts.
-  return req.ip ?? req.socket.remoteAddress ?? "unknown";
+  const ip = req.ip;
+
+  // If the tunnel ever stops sending `X-Forwarded-For`, `req.ip` collapses to
+  // the loopback peer and every visitor on earth would share one bucket —
+  // which would lock the whole site out rather than any one abuser. Falling
+  // back to Cloudflare's own header is safe precisely because nothing but the
+  // tunnel can reach this port.
+  if (!ip || LOOPBACK.has(ip)) {
+    const forwarded = req.get("cf-connecting-ip")?.trim();
+    if (forwarded) return forwarded;
+  }
+
+  return ip ?? req.socket.remoteAddress ?? "unknown";
 }
 
 function tooMany(res: Response, resetAt: number, message: string) {

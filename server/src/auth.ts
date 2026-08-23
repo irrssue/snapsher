@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { config } from "./config.js";
 import { db, type UserRow } from "./db.js";
 import { createLockout, rateLimit, rejectLocked } from "./rateLimit.js";
+import { asyncRoute } from "./security.js";
 import { endSession, requireAuth, startSession, toPublicUser } from "./sessions.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -48,6 +49,26 @@ function validatePassword(password: unknown): PasswordCheck {
   return { ok: true, value: password };
 }
 
+/**
+ * Rejects "ada@example.com" / "ada1234567". The minimum length matters: a
+ * two-letter local part or a short username appears inside almost any password
+ * by coincidence, and rejecting those would be indistinguishable from the rule
+ * being broken — especially since this runs on the username step, after the
+ * password was typed on the previous screen.
+ */
+const MIN_IDENTITY_FRAGMENT = 4;
+
+function passwordEchoesIdentity(password: string, username: string, email: string): boolean {
+  const lowered = password.toLowerCase();
+  return [username.toLowerCase(), email.split("@")[0]].some(
+    (fragment) => fragment.length >= MIN_IDENTITY_FRAGMENT && lowered.includes(fragment),
+  );
+}
+
+function isUniqueConstraintError(err: unknown): boolean {
+  return String((err as { code?: string })?.code ?? "").startsWith("SQLITE_CONSTRAINT");
+}
+
 async function verifyPassword(password: string, hash: string): Promise<boolean> {
   try {
     return await bcrypt.compare(password, hash);
@@ -85,7 +106,7 @@ authRouter.use(express.json({ limit: "16kb" }));
 authRouter.post(
   "/continue",
   rateLimit(config.rateLimits.signIn),
-  async (req, res) => {
+  asyncRoute(async (req, res) => {
     const { email, password } = req.body ?? {};
 
     if (typeof email !== "string" || email.length > MAX_EMAIL_LENGTH || !EMAIL_RE.test(email.trim())) {
@@ -119,60 +140,67 @@ authRouter.post(
     await upgradeHashIfStale(user, password);
     startSession(req, res, user.id);
     res.json({ user: toPublicUser(user) });
-  },
+  }),
 );
 
-authRouter.post("/signup", rateLimit(config.rateLimits.signUp), async (req, res) => {
-  const { username, email, password } = req.body ?? {};
+authRouter.post(
+  "/signup",
+  rateLimit(config.rateLimits.signUp),
+  asyncRoute(async (req, res) => {
+    const { username, email, password } = req.body ?? {};
 
-  if (typeof username !== "string" || !USERNAME_RE.test(username.trim())) {
-    return res.status(400).json({
-      error: "Username must be 3-20 characters and contain only letters, numbers, and underscores.",
-    });
-  }
-  if (typeof email !== "string" || email.length > MAX_EMAIL_LENGTH || !EMAIL_RE.test(email.trim())) {
-    return res.status(400).json({ error: "Enter a valid email address." });
-  }
+    if (typeof username !== "string" || !USERNAME_RE.test(username.trim())) {
+      return res.status(400).json({
+        error:
+          "Username must be 3-20 characters and contain only letters, numbers, and underscores.",
+      });
+    }
+    if (
+      typeof email !== "string" ||
+      email.length > MAX_EMAIL_LENGTH ||
+      !EMAIL_RE.test(email.trim())
+    ) {
+      return res.status(400).json({ error: "Enter a valid email address." });
+    }
 
-  const checked = validatePassword(password);
-  if (!checked.ok) return res.status(400).json({ error: checked.error });
+    const checked = validatePassword(password);
+    if (!checked.ok) return res.status(400).json({ error: checked.error });
 
-  const trimmedUsername = username.trim();
-  const normalizedEmail = normalizeEmail(email);
-  const lowerPassword = checked.value.toLowerCase();
+    const trimmedUsername = username.trim();
+    const normalizedEmail = normalizeEmail(email);
 
-  if (
-    lowerPassword.includes(trimmedUsername.toLowerCase()) ||
-    lowerPassword.includes(normalizedEmail.split("@")[0])
-  ) {
-    return res.status(400).json({
-      error: "Choose a password that doesn't contain your username or email address.",
-    });
-  }
+    if (passwordEchoesIdentity(checked.value, trimmedUsername, normalizedEmail)) {
+      return res.status(400).json({
+        error: "Choose a password that doesn't contain your username or email address.",
+      });
+    }
 
-  const existing = db
-    .prepare("SELECT id FROM users WHERE email = ? COLLATE NOCASE OR username = ? COLLATE NOCASE")
-    .get(normalizedEmail, trimmedUsername);
-  if (existing) {
-    return res.status(409).json({ error: "Username or email is already taken." });
-  }
+    const existing = db
+      .prepare("SELECT id FROM users WHERE email = ? COLLATE NOCASE OR username = ? COLLATE NOCASE")
+      .get(normalizedEmail, trimmedUsername);
+    if (existing) {
+      return res.status(409).json({ error: "Username or email is already taken." });
+    }
 
-  const passwordHash = await bcrypt.hash(checked.value, config.bcryptCost);
+    const passwordHash = await bcrypt.hash(checked.value, config.bcryptCost);
 
-  let user: UserRow;
-  try {
-    const result = db
-      .prepare("INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)")
-      .run(trimmedUsername, normalizedEmail, passwordHash);
-    user = db.prepare("SELECT * FROM users WHERE id = ?").get(result.lastInsertRowid) as UserRow;
-  } catch {
-    // Lost the race against a simultaneous signup on the same unique column.
-    return res.status(409).json({ error: "Username or email is already taken." });
-  }
+    let user: UserRow;
+    try {
+      const result = db
+        .prepare("INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)")
+        .run(trimmedUsername, normalizedEmail, passwordHash);
+      user = db.prepare("SELECT * FROM users WHERE id = ?").get(result.lastInsertRowid) as UserRow;
+    } catch (err) {
+      // Only a uniqueness collision means "taken" — anything else is our
+      // problem, and reporting it as a duplicate would bury a real fault.
+      if (!isUniqueConstraintError(err)) throw err;
+      return res.status(409).json({ error: "Username or email is already taken." });
+    }
 
-  startSession(req, res, user.id);
-  res.status(201).json({ user: toPublicUser(user) });
-});
+    startSession(req, res, user.id);
+    res.status(201).json({ user: toPublicUser(user) });
+  }),
+);
 
 authRouter.post("/logout", (req, res) => {
   endSession(req, res);

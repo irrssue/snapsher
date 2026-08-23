@@ -71,6 +71,12 @@ export const config = {
 
   rateLimits: {
     api: { windowMs: 15 * MINUTE, max: envInt("RATE_LIMIT_API", 600) },
+    /**
+     * Photos get their own, far larger budget: a single cold feed load is one
+     * API call plus up to 100 image requests, so sharing the API's bucket
+     * would let ordinary browsing rate-limit the reader out of their own feed.
+     */
+    photos: { windowMs: 15 * MINUTE, max: envInt("RATE_LIMIT_PHOTOS", 3000) },
     signIn: { windowMs: 15 * MINUTE, max: 20 },
     signUp: { windowMs: HOUR, max: 5 },
     createPost: { windowMs: HOUR, max: 10 },

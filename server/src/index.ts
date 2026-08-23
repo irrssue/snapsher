@@ -34,11 +34,13 @@ if (config.clientOrigins.length > 0) {
 /**
  * Everything dynamic sits behind this chain, in this order: count the request,
  * resolve who is making it, then prove it came from our own front end before
- * any handler — or any body parser — sees it. Static assets skip the chain so a
- * page full of images can't spend a user's rate-limit budget.
+ * any handler — or any body parser — sees it. The SPA bundle skips the chain
+ * entirely, and photos are counted separately from the API so that loading a
+ * feed full of images can't exhaust a reader's budget for the API itself.
  */
 const dynamicPaths = ["/api", "/uploads"];
-app.use(dynamicPaths, rateLimit(config.rateLimits.api));
+app.use("/api", rateLimit(config.rateLimits.api));
+app.use("/uploads", rateLimit(config.rateLimits.photos));
 app.use(dynamicPaths, attachSession);
 app.use(dynamicPaths, enforceTrustedOrigin);
 app.use(dynamicPaths, requireCsrfToken);

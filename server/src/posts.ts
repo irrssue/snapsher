@@ -16,8 +16,6 @@ import {
   type Actor,
 } from "./postsStore.js";
 
-export { uploadsDir };
-
 const MAX_DESCRIPTION_LENGTH = 300;
 const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
 

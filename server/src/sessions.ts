@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { CookieOptions, NextFunction, Request, RequestHandler, Response } from "express";
 import { config } from "./config.js";
 import { db, type SessionRow, type UserRow } from "./db.js";
+import { SAFE_METHODS } from "./security.js";
 
 const SESSION_COOKIE = "sid";
 /**
@@ -93,7 +94,6 @@ const insertSession = db.prepare(
 const selectSession = db.prepare("SELECT * FROM sessions WHERE id = ?");
 const touchSession = db.prepare("UPDATE sessions SET last_seen_at = ? WHERE id = ?");
 const deleteSession = db.prepare("DELETE FROM sessions WHERE id = ?");
-const deleteUserSessions = db.prepare("DELETE FROM sessions WHERE user_id = ?");
 const deleteStaleSessions = db.prepare(
   "DELETE FROM sessions WHERE expires_at <= ? OR last_seen_at <= ?",
 );
@@ -136,6 +136,12 @@ export function startSession(req: Request, res: Response, userId: number): Sessi
   res.cookie(SESSION_COOKIE, token, cookieOptions(maxAge, true));
   res.cookie(CSRF_COOKIE, session.csrf_token, cookieOptions(maxAge, false));
 
+  // Signing in is the one moment every carry-over user passes through, so it's
+  // where the dead cookie-session cookies actually get swept up.
+  for (const name of LEGACY_COOKIES) {
+    res.clearCookie(name, { path: "/", secure: config.cookieSecure, sameSite: "lax", httpOnly: true });
+  }
+
   return session;
 }
 
@@ -150,11 +156,6 @@ export function endSession(
   if (clearCookiesToo) clearCookies(res);
 }
 
-/** Used when an account's credentials change under it — revokes every device. */
-export function endAllSessionsForUser(userId: number) {
-  deleteUserSessions.run(userId);
-}
-
 /**
  * Resolves the session cookie into `req.auth`, enforcing both the idle window
  * and the absolute deadline, and drops the row the moment either passes.
@@ -162,6 +163,11 @@ export function endAllSessionsForUser(userId: number) {
 export const attachSession: RequestHandler = (req, res, next) => {
   const token = readCookie(req, SESSION_COOKIE);
   if (!token) return next();
+
+  // A cookie was presented, so any failure below is a session that ended
+  // rather than a visitor who never had one — a distinction the client uses to
+  // decide between "sign in again" and simply showing the sign-in page.
+  req.authExpired = true;
 
   const id = hashToken(token);
   const session = selectSession.get(id) as SessionRow | undefined;
@@ -194,6 +200,7 @@ export const attachSession: RequestHandler = (req, res, next) => {
   }
 
   req.auth = { user: toPublicUser(user), session };
+  req.authExpired = false;
 
   // Self-heal a CSRF cookie the browser lost (cleared site data, an older
   // build) so the user isn't stuck unable to post until they sign in again.
@@ -210,15 +217,15 @@ export const attachSession: RequestHandler = (req, res, next) => {
  */
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!req.auth) {
-    return res.status(401).json({
-      error: "Your session has ended. Please sign in again.",
-      code: "session_expired",
-    });
+    return req.authExpired
+      ? res.status(401).json({
+          error: "Your session has ended. Please sign in again.",
+          code: "session_expired",
+        })
+      : res.status(401).json({ error: "Please sign in.", code: "not_authenticated" });
   }
   next();
 }
-
-const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /**
  * Double-submit CSRF check, bound to the session row rather than to a second

@@ -10,7 +10,7 @@ export const uploadsDir = path.join(__dirname, "..", "uploads");
 fs.mkdirSync(uploadsDir, { recursive: true, mode: 0o750 });
 
 /** One photo per 12 hours — the whole point of the product, enforced here. */
-export const POST_INTERVAL_MS = 12 * 60 * 60 * 1000;
+const POST_INTERVAL_MS = 12 * 60 * 60 * 1000;
 
 const FEED_LIMIT = 100;
 
@@ -142,17 +142,20 @@ export function nextAllowedAtFor(actor: Actor): number {
 }
 
 /**
- * Resolves an upload filename to a path on disk, but only when it belongs to a
- * post this actor is allowed to read. Unauthorised and non-existent both come
- * back as null so the caller answers 404 either way and never confirms that a
- * given photo exists.
+ * Resolves an upload filename to a path on disk, but only for a signed-in
+ * actor and only when the file actually backs a post — a loose file dropped
+ * into the uploads directory is not reachable.
+ *
+ * Under the current feed policy every member may read every member's photos,
+ * so the actor is not narrowing the result today; it is the parameter a
+ * narrower policy (followers-only, private posts) would filter on, and the
+ * caller answers 404 either way so a rejection never confirms the file exists.
  */
 export function resolvePhotoFor(actor: Actor, photoFile: string): string | null {
   assertActor(actor);
 
-  const owner = selectPhotoOwner.get(photoFile) as Pick<PostRow, "user_id"> | undefined;
-  if (!owner) return null;
+  const post = selectPhotoOwner.get(photoFile) as Pick<PostRow, "user_id"> | undefined;
+  if (!post) return null;
 
-  // Feed policy: every member may read every member's photos.
   return path.join(uploadsDir, photoFile);
 }

@@ -1,7 +1,23 @@
-import type { ErrorRequestHandler, Request, RequestHandler } from "express";
+import type { ErrorRequestHandler, NextFunction, Request, RequestHandler, Response } from "express";
 import { config } from "./config.js";
 
-const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+export const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * Express 4 hands a rejected promise from an `async` handler to nobody: it
+ * escapes as an unhandled rejection, which on Node 22 takes the whole process
+ * down rather than failing the one request. Every async route must be wrapped
+ * so a database error becomes a 500 instead of a restart — and restarts are
+ * especially expensive here, since the rate-limit and lockout counters live in
+ * memory and a crash loop would quietly clear them.
+ */
+export function asyncRoute(
+  handler: (req: Request, res: Response, next: NextFunction) => Promise<unknown>,
+): RequestHandler {
+  return (req, res, next) => {
+    handler(req, res, next).catch(next);
+  };
+}
 
 /**
  * The app loads nothing from anywhere but itself. `data:` is needed for img-src
@@ -100,7 +116,8 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, next) => {
 
   const type = (err as { type?: string })?.type;
   if (type === "entity.too.large") {
-    return res.status(413).json({ error: "That upload is too large." });
+    // Every route can hit this, not just the one that receives photos.
+    return res.status(413).json({ error: "That request is too large." });
   }
   if (err instanceof SyntaxError && "body" in err) {
     return res.status(400).json({ error: "That request wasn't valid JSON." });
