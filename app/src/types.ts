@@ -8,6 +8,7 @@ export type User = {
 export type Post = {
   id: string;
   username: string;
+  avatarUrl: string | null;
   photoUrl: string;
   /** Null when the author shared the photo without a description. */
   description: string | null;

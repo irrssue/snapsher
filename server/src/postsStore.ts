@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { db, type PostRow } from "./db.js";
+import { avatarUrlFor } from "./avatarsStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -34,6 +35,7 @@ export type Actor = { userId: number };
 export type PublicPost = {
   id: string;
   username: string;
+  avatarUrl: string | null;
   description: string | null;
   photoUrl: string;
   createdAt: number;
@@ -41,6 +43,7 @@ export type PublicPost = {
 
 type FeedRow = Pick<PostRow, "id" | "description" | "photo_file" | "created_at"> & {
   username: string;
+  avatar_file: string | null;
 };
 
 export class QuotaExceededError extends Error {
@@ -53,6 +56,9 @@ function toPublicPost(row: FeedRow): PublicPost {
   return {
     id: String(row.id),
     username: row.username,
+    // Sourced straight from the users row on every read, so a re-uploaded
+    // avatar shows up in the feed immediately without touching posts.
+    avatarUrl: avatarUrlFor(row.avatar_file),
     // Posts shared without a description have none at all — the client drops
     // the description bubble entirely rather than rendering an empty one.
     description: row.description,
@@ -61,7 +67,7 @@ function toPublicPost(row: FeedRow): PublicPost {
   };
 }
 
-const FEED_COLUMNS = `posts.id, posts.description, posts.photo_file, posts.created_at, users.username`;
+const FEED_COLUMNS = `posts.id, posts.description, posts.photo_file, posts.created_at, users.username, users.avatar_file`;
 
 const selectFeed = db.prepare(
   `SELECT ${FEED_COLUMNS}

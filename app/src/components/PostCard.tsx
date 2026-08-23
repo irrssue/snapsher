@@ -1,5 +1,5 @@
 import type { Post } from "../types";
-import { HeartIcon, CommentIcon } from "./icons";
+import { HeartIcon, CommentIcon, PersonIcon } from "./icons";
 
 export function PostCard({ post }: { post: Post }) {
   return (
@@ -12,7 +12,13 @@ export function PostCard({ post }: { post: Post }) {
        */}
       <div className="contents md:flex md:w-64 md:flex-col md:gap-3">
         <div className="flex items-center gap-2">
-          <div className="h-8 w-8 shrink-0 rounded-full bg-neutral-300" />
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-300">
+            {post.avatarUrl ? (
+              <img src={post.avatarUrl} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <PersonIcon className="h-5 w-5 text-neutral-500" />
+            )}
+          </span>
           <span className="text-sm text-white">@{post.username}</span>
         </div>
 
