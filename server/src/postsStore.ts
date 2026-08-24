@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { db, type PostRow } from "./db.js";
 import { avatarUrlFor } from "./avatarsStore.js";
 import { friendIdsFor } from "./friendsStore.js";
+import { likeStatsFor, type LikeStats } from "./likesStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -40,9 +41,13 @@ export type PublicPost = {
   description: string | null;
   photoUrl: string;
   createdAt: number;
+  likedByMe: boolean;
+  isOwner: boolean;
+  /** Only ever set when `isOwner` is true — nobody else may learn a post's like count. */
+  likeCount?: number;
 };
 
-type FeedRow = Pick<PostRow, "id" | "description" | "photo_file" | "created_at"> & {
+type FeedRow = Pick<PostRow, "id" | "user_id" | "description" | "photo_file" | "created_at"> & {
   username: string;
   avatar_file: string | null;
 };
@@ -53,7 +58,8 @@ export class QuotaExceededError extends Error {
   }
 }
 
-function toPublicPost(row: FeedRow): PublicPost {
+function toPublicPost(row: FeedRow, actor: Actor, stats: LikeStats | undefined): PublicPost {
+  const isOwner = row.user_id === actor.userId;
   return {
     id: String(row.id),
     username: row.username,
@@ -65,10 +71,13 @@ function toPublicPost(row: FeedRow): PublicPost {
     description: row.description,
     photoUrl: `/uploads/${row.photo_file}`,
     createdAt: row.created_at,
+    likedByMe: stats?.likedByMe ?? false,
+    isOwner,
+    ...(isOwner ? { likeCount: stats?.count ?? 0 } : {}),
   };
 }
 
-const FEED_COLUMNS = `posts.id, posts.description, posts.photo_file, posts.created_at, users.username, users.avatar_file`;
+const FEED_COLUMNS = `posts.id, posts.user_id, posts.description, posts.photo_file, posts.created_at, users.username, users.avatar_file`;
 
 /**
  * The `?` placeholders for the author list are spliced in per-call since
@@ -127,7 +136,8 @@ export function listFeedFor(actor: Actor): PublicPost[] {
     ...authorIds,
     FEED_LIMIT,
   ) as FeedRow[];
-  return rows.map(toPublicPost);
+  const stats = likeStatsFor(actor, rows.map((row) => row.id));
+  return rows.map((row) => toPublicPost(row, actor, stats.get(row.id)));
 }
 
 export function quotaFor(actor: Actor) {
@@ -158,7 +168,8 @@ export function createPostFor(
   const id = insertWithinQuota(actor.userId, input.description, input.photoFile, createdAt);
 
   return {
-    post: toPublicPost(selectPostById.get(id) as FeedRow),
+    // A brand-new post has no likes yet, so there's nothing to batch-fetch.
+    post: toPublicPost(selectPostById.get(id) as FeedRow, actor, undefined),
     nextAllowedAt: createdAt + POST_INTERVAL_MS,
   };
 }

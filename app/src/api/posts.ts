@@ -1,4 +1,4 @@
-import type { Post, PostQuota } from "../types";
+import type { Liker, Post, PostQuota } from "../types";
 import { api } from "./http";
 
 export async function fetchPosts(): Promise<Post[]> {
@@ -21,6 +21,15 @@ export async function createPost(input: {
     method: "POST",
     body: input,
   });
+}
+
+export async function toggleLike(postId: string): Promise<{ liked: boolean }> {
+  return api<{ liked: boolean }>(`/api/posts/${postId}/like`, { method: "POST" });
+}
+
+export async function fetchLikers(postId: string): Promise<Liker[]> {
+  const { likers } = await api<{ likers: Liker[] }>(`/api/posts/${postId}/likers`);
+  return likers;
 }
 
 const MAX_EDGE = 1440;

@@ -15,6 +15,7 @@ import {
   uploadsDir,
   type Actor,
 } from "./postsStore.js";
+import { likersFor, toggleLike, LikeError } from "./likesStore.js";
 import {
   CONTENT_TYPE_BY_EXTENSION,
   EXTENSION_BY_FORMAT,
@@ -32,6 +33,11 @@ const PHOTO_FILE_RE =
 
 function actorOf(req: express.Request): Actor {
   return { userId: req.auth!.user.id };
+}
+
+function parseId(raw: string): number | null {
+  const id = Number(raw);
+  return Number.isInteger(id) && id > 0 ? id : null;
 }
 
 export const postsRouter = Router();
@@ -120,6 +126,34 @@ postsRouter.post(
     }
   },
 );
+
+postsRouter.post("/:id/like", express.json({ limit: "1kb" }), (req, res) => {
+  const postId = parseId(req.params.id);
+  if (postId === null) return res.status(404).json({ error: "Not found." });
+
+  try {
+    res.json(toggleLike(actorOf(req), postId));
+  } catch (err) {
+    if (err instanceof LikeError) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+});
+
+/**
+ * Who liked a post — deliberately the only place this app ever reveals a like
+ * count, and deliberately restricted to the post's own author.
+ */
+postsRouter.get("/:id/likers", (req, res) => {
+  const postId = parseId(req.params.id);
+  if (postId === null) return res.status(404).json({ error: "Not found." });
+
+  try {
+    res.json({ likers: likersFor(actorOf(req), postId) });
+  } catch (err) {
+    if (err instanceof LikeError) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+});
 
 /**
  * Photos are served through the app rather than as blind static files, so that

@@ -77,6 +77,20 @@ db.exec(`
   )
 `);
 
+/**
+ * One row per (post, user) who liked it. The pair is the primary key so a
+ * double-tap can't double-count, and `toggleLike` never needs a separate
+ * existence check before deciding whether to insert or delete.
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS likes (
+    post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (post_id, user_id)
+  )
+`);
+
 db.exec(
   "CREATE INDEX IF NOT EXISTS idx_posts_user_created ON posts (user_id, created_at DESC)",
 );
@@ -126,6 +140,12 @@ export type PostRow = {
   user_id: number;
   description: string | null;
   photo_file: string;
+  created_at: number;
+};
+
+export type LikeRow = {
+  post_id: number;
+  user_id: number;
   created_at: number;
 };
 

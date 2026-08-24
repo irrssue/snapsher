@@ -13,6 +13,16 @@ export type Post = {
   /** Null when the author shared the photo without a description. */
   description: string | null;
   createdAt: number;
+  likedByMe: boolean;
+  isOwner: boolean;
+  /** Only ever present when `isOwner` is true — nobody else can see a like count. */
+  likeCount?: number;
+};
+
+export type Liker = {
+  id: number;
+  username: string;
+  avatarUrl: string | null;
 };
 
 export type PostQuota = {
