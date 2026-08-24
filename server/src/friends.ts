@@ -1,4 +1,6 @@
 import express, { Router } from "express";
+import { config } from "./config.js";
+import { rateLimit } from "./rateLimit.js";
 import { requireAuth } from "./sessions.js";
 import {
   acceptFriendRequest,
@@ -34,7 +36,7 @@ friendsRouter.get("/requests", (req, res) => {
   res.json({ requests: listIncomingRequests(actorOf(req)) });
 });
 
-friendsRouter.post("/requests", (req, res) => {
+friendsRouter.post("/requests", rateLimit(config.rateLimits.friendRequest), (req, res) => {
   const targetUserId = parseId(String(req.body?.userId ?? ""));
   if (targetUserId === null) {
     return res.status(400).json({ error: "A user id is required." });
@@ -93,8 +95,15 @@ export const usersRouter = Router();
 
 usersRouter.use(requireAuth);
 
-usersRouter.get("/search", (req, res) => {
-  const q = typeof req.query.q === "string" ? req.query.q : "";
+/**
+ * The search term is truncated rather than rejected: past a couple of dozen
+ * characters no username can still match, so a longer one is either a paste or
+ * an attempt to make the scan expensive, and neither is worth an error message.
+ */
+const MAX_SEARCH_LENGTH = 64;
+
+usersRouter.get("/search", rateLimit(config.rateLimits.userSearch), (req, res) => {
+  const q = typeof req.query.q === "string" ? req.query.q.slice(0, MAX_SEARCH_LENGTH) : "";
   if (!q.trim()) return res.json({ users: [] });
 
   res.json({ users: searchUsers(actorOf(req), q) });

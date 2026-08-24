@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import type { Liker, Post } from "../types";
-import { fetchLikers, toggleLike } from "../api/posts";
+import type { Comment, Liker, Post } from "../types";
+import {
+  addComment,
+  deleteComment,
+  fetchComments,
+  fetchLikers,
+  toggleLike,
+} from "../api/posts";
 import { HeartIcon, CommentIcon, CloseIcon, PersonIcon } from "./icons";
 
 const postDateFormatter = new Intl.DateTimeFormat("en-US", {
@@ -10,6 +16,14 @@ const postDateFormatter = new Intl.DateTimeFormat("en-US", {
   year: "numeric",
 });
 
+const commentTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+});
+
+/** Mirrors the server's own limit, so the cap is felt while typing. */
+const MAX_COMMENT_LENGTH = 500;
+
 export function PostCard({ post }: { post: Post }) {
   const [liked, setLiked] = useState(post.likedByMe);
   const [likeCount, setLikeCount] = useState(post.likeCount ?? 0);
@@ -17,6 +31,13 @@ export function PostCard({ post }: { post: Post }) {
   const [likers, setLikers] = useState<Liker[] | null>(null);
   const [likersError, setLikersError] = useState<string | null>(null);
   const pendingLike = useRef(false);
+
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  /** Null means "not loaded yet", which is distinct from an empty thread. */
+  const [comments, setComments] = useState<Comment[] | null>(null);
+  const [commentsError, setCommentsError] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     if (!likersOpen) return;
@@ -33,6 +54,62 @@ export function PostCard({ post }: { post: Post }) {
     };
   }, [likersOpen, post.id]);
 
+  useEffect(() => {
+    if (!commentsOpen) return;
+    let active = true;
+
+    setComments(null);
+    setCommentsError(null);
+    fetchComments(post.id)
+      .then((result) => active && setComments(result))
+      .catch(
+        (err) =>
+          active &&
+          setCommentsError(err instanceof Error ? err.message : "Couldn't load comments."),
+      );
+
+    return () => {
+      active = false;
+    };
+  }, [commentsOpen, post.id]);
+
+  async function handleAddComment(e: React.FormEvent) {
+    e.preventDefault();
+    const body = draft.trim();
+    if (!body || sending) return;
+
+    setSending(true);
+    setCommentsError(null);
+    try {
+      const created = await addComment(post.id, body);
+      // Appended rather than refetched: the server returns the row it wrote, and
+      // the thread is ordered oldest-first, so the new one belongs at the end.
+      setComments((current) => [...(current ?? []), created]);
+      setDraft("");
+    } catch (err) {
+      setCommentsError(err instanceof Error ? err.message : "Couldn't post that comment.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleDeleteComment(comment: Comment) {
+    setCommentsError(null);
+    setComments((current) => current?.filter((c) => c.id !== comment.id) ?? null);
+    try {
+      await deleteComment(post.id, comment.id);
+    } catch (err) {
+      // Put it back rather than leave the thread asserting a deletion the
+      // server never performed.
+      setComments((current) =>
+        current && !current.some((c) => c.id === comment.id)
+          ? [...current, comment].sort((a, b) => a.createdAt - b.createdAt)
+          : current,
+      );
+      setCommentsError(err instanceof Error ? err.message : "Couldn't delete that comment.");
+    }
+  }
+
   async function handleToggleLike() {
     // A tap while a previous toggle is still in flight would race the server
     // state, so this button only accepts one request at a time.
@@ -46,6 +123,12 @@ export function PostCard({ post }: { post: Post }) {
     try {
       const result = await toggleLike(post.id);
       setLiked(result.liked);
+      // The optimistic count above only knows about this tap. On the author's
+      // own post the server sends back the real total, which is the only thing
+      // that accounts for likes other people added since the feed was loaded —
+      // without it the button drifts out of step with the popup it opens.
+      // Absent on anyone else's post, where no count is shown at all.
+      if (result.count !== undefined) setLikeCount(result.count);
     } catch {
       setLiked(wasLiked);
       setLikeCount((count) => count + (wasLiked ? 1 : -1));
@@ -92,10 +175,19 @@ export function PostCard({ post }: { post: Post }) {
           >
             <HeartIcon className="h-6 w-6" />
           </button>
+          {/*
+           * No badge, now or ever: `about.md` keeps the comment action and
+           * drops the count, so this opens the thread without ever saying how
+           * long it is.
+           */}
           <button
             type="button"
-            aria-label="Comment"
-            className="p-2 transition-opacity hover:opacity-70 md:p-0"
+            aria-label={commentsOpen ? "Hide comments" : "Comments"}
+            aria-expanded={commentsOpen}
+            onClick={() => setCommentsOpen((open) => !open)}
+            className={`p-2 transition-opacity hover:opacity-70 md:p-0 ${
+              commentsOpen ? "text-neutral-400" : ""
+            }`}
           >
             <CommentIcon className="h-6 w-6" />
           </button>
@@ -157,6 +249,91 @@ export function PostCard({ post }: { post: Post }) {
             </div>
           )}
         </div>
+
+        {/*
+         * The thread sits in the flow below the action row rather than floating
+         * over it like the likers popover: it holds an input and an arbitrary
+         * number of replies, so it needs to push the layout rather than cover
+         * it. `order-2` keeps it after the action row on phones, where the
+         * column is `contents` and the parent is doing the ordering.
+         */}
+        {commentsOpen && (
+          <div className="order-2 flex flex-col gap-3 rounded-2xl bg-neutral-800 p-3 md:order-none">
+            {commentsError && <p className="text-xs text-red-400">{commentsError}</p>}
+
+            {comments === null && !commentsError && (
+              <p className="text-xs text-neutral-400">Loading…</p>
+            )}
+
+            {comments?.length === 0 && (
+              <p className="text-xs text-neutral-400">No comments yet.</p>
+            )}
+
+            {comments && comments.length > 0 && (
+              <ul className="flex max-h-56 flex-col gap-3 overflow-y-auto">
+                {comments.map((comment) => (
+                  <li key={comment.id} className="flex items-start gap-2">
+                    <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-300">
+                      {comment.avatarUrl ? (
+                        <img
+                          src={comment.avatarUrl}
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <PersonIcon className="h-4 w-4 text-neutral-500" />
+                      )}
+                    </span>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline gap-2">
+                        <span className="truncate text-xs font-semibold text-white">
+                          @{comment.username}
+                        </span>
+                        <span className="shrink-0 text-[10px] text-neutral-500">
+                          {commentTimeFormatter.format(new Date(comment.createdAt))}
+                        </span>
+                      </div>
+                      <p className="whitespace-pre-line break-words text-xs text-neutral-200">
+                        {comment.body}
+                      </p>
+                    </div>
+
+                    {comment.canDelete && (
+                      <button
+                        type="button"
+                        aria-label={`Delete comment by @${comment.username}`}
+                        onClick={() => handleDeleteComment(comment)}
+                        className="shrink-0 text-neutral-500 transition-colors hover:text-white"
+                      >
+                        <CloseIcon className="h-3 w-3" />
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <form onSubmit={handleAddComment} className="flex items-center gap-2">
+              <input
+                type="text"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                maxLength={MAX_COMMENT_LENGTH}
+                placeholder="Add a comment"
+                aria-label="Add a comment"
+                className="min-w-0 flex-1 rounded-full bg-neutral-900 px-3 py-1.5 text-xs text-white placeholder:text-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-600"
+              />
+              <button
+                type="submit"
+                disabled={!draft.trim() || sending}
+                className="shrink-0 rounded-full bg-white px-3 py-1.5 text-xs text-black transition-opacity hover:opacity-90 disabled:opacity-40"
+              >
+                {sending ? "…" : "Post"}
+              </button>
+            </form>
+          </div>
+        )}
       </div>
 
       <div className="aspect-square w-full overflow-hidden rounded-3xl bg-neutral-300 md:aspect-auto md:h-[21.6rem] md:w-[21.6rem] md:shrink-0">

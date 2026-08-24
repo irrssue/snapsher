@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { NavBar } from "./components/NavBar";
 import { PostCard } from "./components/PostCard";
 import { FriendsTab } from "./components/FriendsTab";
@@ -12,7 +12,7 @@ import {
 } from "./components/AuthPage";
 import { continueWithCredentials, fetchCurrentUser, logout, signup } from "./api/auth";
 import { createPost, fetchPosts, fetchQuota } from "./api/posts";
-import { onSessionExpired } from "./api/http";
+import { ApiError, onSessionExpired } from "./api/http";
 import type { Post, User } from "./types";
 
 /**
@@ -35,37 +35,73 @@ function SignedInApp({
   const [feedError, setFeedError] = useState<string | null>(null);
   /** Null means the posting window is unknown, not that posting is allowed. */
   const [nextAllowedAt, setNextAllowedAt] = useState<number | null>(null);
+  /**
+   * How far this device's clock sits from the server's, measured once per quota
+   * fetch. `nextAllowedAt` is an absolute timestamp taken from the server, so
+   * comparing it against a raw `Date.now()` compares two clocks: a phone half an
+   * hour fast counts down to zero early, enables Share, and earns a 429.
+   */
+  const [clockOffset, setClockOffset] = useState(0);
   const [composing, setComposing] = useState(false);
+
+  /**
+   * Also handed to `FriendsTab`, which is a sibling with its own state — so
+   * accepting or removing a friend there changes who this feed should contain
+   * while nothing remounts it. Without this the new friend's posts never
+   * appear, and a removed friend's stay on screen with their photos 404ing.
+   */
+  const refreshFeed = useCallback(async () => {
+    // `allSettled`, not `all`: these two fail independently, and a 500 from the
+    // quota endpoint used to take a perfectly good feed down with it.
+    const [postsResult, quotaResult] = await Promise.allSettled([fetchPosts(), fetchQuota()]);
+
+    if (postsResult.status === "fulfilled") {
+      setPosts(postsResult.value);
+      setFeedError(null);
+    } else {
+      const err = postsResult.reason;
+      setFeedError(err instanceof Error ? err.message : "Couldn't load your feed.");
+    }
+
+    if (quotaResult.status === "fulfilled") {
+      setNextAllowedAt(quotaResult.value.nextAllowedAt);
+      setClockOffset(quotaResult.value.serverNow - Date.now());
+    } else {
+      // Null degrades the countdown to "couldn't check", which is not the same
+      // as permission to post — and leaves the feed above untouched.
+      setNextAllowedAt(null);
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
-
-    Promise.all([fetchPosts(), fetchQuota()])
-      .then(([nextPosts, quota]) => {
-        if (!active) return;
-        setPosts(nextPosts);
-        setNextAllowedAt(quota.nextAllowedAt);
-        setFeedError(null);
-      })
-      .catch((err) => {
-        if (!active) return;
-        setFeedError(err instanceof Error ? err.message : "Couldn't load your feed.");
-      })
-      .finally(() => {
-        if (active) setLoadingFeed(false);
-      });
-
+    refreshFeed().finally(() => {
+      if (active) setLoadingFeed(false);
+    });
     return () => {
       active = false;
     };
-  }, []);
+  }, [refreshFeed]);
 
   async function handleShare(input: { photo: string; description: string }) {
-    const { post, nextAllowedAt: allowedAt } = await createPost(input);
-    setPosts((current) => [post, ...current]);
-    setNextAllowedAt(allowedAt);
-    setComposing(false);
-    setView("home");
+    try {
+      const { post, nextAllowedAt: allowedAt } = await createPost(input);
+      setPosts((current) => [post, ...current]);
+      setNextAllowedAt(allowedAt);
+      setComposing(false);
+      setView("home");
+    } catch (err) {
+      // A 429 here means the window was spent elsewhere — a second tab, another
+      // device — while this one still believed it could post. The rejection
+      // reports when the window reopens, so adopting it re-disables Share and
+      // starts the countdown instead of leaving a button whose only remaining
+      // effect is to burn rate-limit budget.
+      if (err instanceof ApiError && typeof err.details?.nextAllowedAt === "number") {
+        setNextAllowedAt(err.details.nextAllowedAt);
+      }
+      // Rethrown so the modal still shows the server's own message.
+      throw err;
+    }
   }
 
   return (
@@ -92,12 +128,12 @@ function SignedInApp({
             )}
           </div>
         ) : view === "friends" ? (
-          <FriendsTab />
+          <FriendsTab onFriendsChanged={refreshFeed} />
         ) : (
           <div className="flex w-full max-w-md flex-col items-center gap-8 pt-8 md:pt-16">
             <ProfileAvatar user={user} onAvatarChange={onAvatarChange} />
             <span className="text-white">@{user.username}</span>
-            <Countdown nextAllowedAt={nextAllowedAt} />
+            <Countdown nextAllowedAt={nextAllowedAt} clockOffset={clockOffset} />
             <button
               type="button"
               onClick={onLogout}
@@ -113,6 +149,7 @@ function SignedInApp({
         <ComposeModal
           username={user.username}
           nextAllowedAt={nextAllowedAt}
+          clockOffset={clockOffset}
           onClose={() => setComposing(false)}
           onShare={handleShare}
         />
@@ -186,8 +223,11 @@ function App() {
 
   function handleAuthBack() {
     setAuthStep("credentials");
-    setPendingCredentials(null);
     setAuthError(null);
+    // `pendingCredentials` is kept on purpose: it is what fills the email field
+    // back in. Clearing it made "use a different email" wipe the address the
+    // user had just typed correctly, so changing one character of it meant
+    // retyping the whole thing.
   }
 
   async function handleLogout() {

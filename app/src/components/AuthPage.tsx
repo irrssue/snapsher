@@ -62,6 +62,12 @@ export function AuthPage({
             placeholder="Password"
             autoComplete="current-password"
             required
+            // Mirrors the server's minimum. Signing in to an existing account
+            // never trips it, since no account can have a shorter password;
+            // what it catches is the sign-up path, where the rule would
+            // otherwise only be reported one screen later, on a form that has
+            // no password field to correct.
+            minLength={8}
           />
 
           {error && <p className="text-center text-xs text-red-400">{error}</p>}

@@ -3,18 +3,39 @@
  * header, and error handling can't be forgotten one endpoint at a time.
  */
 
-const CSRF_COOKIE = "csrf";
+/**
+ * Two names, because the server picks between them at boot. Over HTTPS it sets
+ * `__Host-csrf`, a prefix the browser only honours on a `Secure` cookie and
+ * which no sibling subdomain can forge; over plain HTTP — local development —
+ * that prefix would make the browser drop the cookie outright, so the bare name
+ * is used instead. The prefixed one is checked first so that a stale bare
+ * cookie left over from before the rename can never win.
+ */
+const CSRF_COOKIES = ["__Host-csrf", "csrf"];
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 export class ApiError extends Error {
   readonly status: number;
   readonly code?: string;
+  /**
+   * The whole parsed error payload. Several failures carry a field the caller
+   * needs to recover properly rather than just something to display — a 429
+   * from `POST /api/posts` reports the `nextAllowedAt` that caused it, and
+   * without it a second tab never learns its posting window is spent.
+   */
+  readonly details?: Record<string, unknown>;
 
-  constructor(message: string, status: number, code?: string) {
+  constructor(
+    message: string,
+    status: number,
+    code?: string,
+    details?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -29,9 +50,17 @@ export function onSessionExpired(listener: () => void): () => void {
 }
 
 function readCsrfToken(): string | null {
+  const found = new Map<string, string>();
   for (const part of document.cookie.split(";")) {
     const [name, ...rest] = part.split("=");
-    if (name.trim() === CSRF_COOKIE) return decodeURIComponent(rest.join("=").trim());
+    const trimmed = name.trim();
+    if (CSRF_COOKIES.includes(trimmed) && !found.has(trimmed)) {
+      found.set(trimmed, decodeURIComponent(rest.join("=").trim()));
+    }
+  }
+  for (const name of CSRF_COOKIES) {
+    const value = found.get(name);
+    if (value !== undefined) return value;
   }
   return null;
 }
@@ -75,7 +104,7 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
       typeof payload.error === "string"
         ? payload.error
         : "Something went wrong. Please try again.";
-    throw new ApiError(message, res.status, code);
+    throw new ApiError(message, res.status, code, payload);
   }
 
   return payload as T;

@@ -5,6 +5,7 @@ import express, { Router } from "express";
 import { config } from "./config.js";
 import { rateLimit } from "./rateLimit.js";
 import { requireAuth } from "./sessions.js";
+import { asyncRoute } from "./security.js";
 import {
   createPostFor,
   listFeedFor,
@@ -16,6 +17,7 @@ import {
   type Actor,
 } from "./postsStore.js";
 import { likersFor, toggleLike, LikeError } from "./likesStore.js";
+import { addComment, CommentError, deleteComment, listComments } from "./commentsStore.js";
 import {
   CONTENT_TYPE_BY_EXTENSION,
   EXTENSION_BY_FORMAT,
@@ -58,7 +60,7 @@ postsRouter.post(
   // Photos arrive as base64 data URLs in the JSON body, so this one route gets
   // a much larger cap than the 16kb the rest of the API accepts.
   express.json({ limit: "12mb" }),
-  (req, res) => {
+  asyncRoute(async (req, res) => {
     const actor = actorOf(req);
     const { photo, description } = req.body ?? {};
 
@@ -104,7 +106,10 @@ postsRouter.post(
 
     const photoFile = `${crypto.randomUUID()}.${EXTENSION_BY_FORMAT[declaredFormat as ImageFormat]}`;
     const photoPath = path.join(uploadsDir, photoFile);
-    fs.writeFileSync(photoPath, bytes, { mode: 0o640 });
+    // Written asynchronously: a synchronous write of up to 8 MB blocks the
+    // event loop for its whole duration, which stalls every other request in
+    // flight — including the feed loads of everyone else on the server.
+    await fs.promises.writeFile(photoPath, bytes, { mode: 0o640 });
 
     try {
       const created = createPostFor(actor, {
@@ -114,7 +119,7 @@ postsRouter.post(
       res.status(201).json(created);
     } catch (err) {
       // Don't leave an orphaned file behind if the row never landed.
-      fs.rmSync(photoPath, { force: true });
+      await fs.promises.rm(photoPath, { force: true });
 
       if (err instanceof QuotaExceededError) {
         return res.status(429).json({
@@ -124,24 +129,29 @@ postsRouter.post(
       }
       throw err;
     }
+  }),
+);
+
+postsRouter.post(
+  "/:id/like",
+  rateLimit(config.rateLimits.like),
+  express.json({ limit: "1kb" }),
+  (req, res) => {
+    const postId = parseId(req.params.id);
+    if (postId === null) return res.status(404).json({ error: "Not found." });
+
+    try {
+      res.json(toggleLike(actorOf(req), postId));
+    } catch (err) {
+      if (err instanceof LikeError) return res.status(err.status).json({ error: err.message });
+      throw err;
+    }
   },
 );
 
-postsRouter.post("/:id/like", express.json({ limit: "1kb" }), (req, res) => {
-  const postId = parseId(req.params.id);
-  if (postId === null) return res.status(404).json({ error: "Not found." });
-
-  try {
-    res.json(toggleLike(actorOf(req), postId));
-  } catch (err) {
-    if (err instanceof LikeError) return res.status(err.status).json({ error: err.message });
-    throw err;
-  }
-});
-
 /**
- * Who liked a post — deliberately the only place this app ever reveals a like
- * count, and deliberately restricted to the post's own author.
+ * Who liked a post — the only place this app ever names them, and deliberately
+ * restricted to the post's own author, the same audience allowed a bare count.
  */
 postsRouter.get("/:id/likers", (req, res) => {
   const postId = parseId(req.params.id);
@@ -151,6 +161,59 @@ postsRouter.get("/:id/likers", (req, res) => {
     res.json({ likers: likersFor(actorOf(req), postId) });
   } catch (err) {
     if (err instanceof LikeError) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+});
+
+/**
+ * Comments. Readable by the same audience as the post itself, and returned as a
+ * plain list — there is no count endpoint and no count field anywhere, which is
+ * the same rule the like button follows and the reason `about.md` gives for
+ * both: the interaction exists, the score-keeping doesn't.
+ */
+postsRouter.get("/:id/comments", (req, res) => {
+  const postId = parseId(req.params.id);
+  if (postId === null) return res.status(404).json({ error: "Not found." });
+
+  try {
+    res.json({ comments: listComments(actorOf(req), postId) });
+  } catch (err) {
+    if (err instanceof CommentError) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
+});
+
+postsRouter.post(
+  "/:id/comments",
+  rateLimit(config.rateLimits.createComment),
+  express.json({ limit: "4kb" }),
+  (req, res) => {
+    const postId = parseId(req.params.id);
+    if (postId === null) return res.status(404).json({ error: "Not found." });
+
+    try {
+      // The body is validated inside the store, beside the length limit it is
+      // checked against, so the rule lives in one place.
+      res.status(201).json({ comment: addComment(actorOf(req), postId, req.body?.body) });
+    } catch (err) {
+      if (err instanceof CommentError) return res.status(err.status).json({ error: err.message });
+      throw err;
+    }
+  },
+);
+
+postsRouter.delete("/:id/comments/:commentId", (req, res) => {
+  const postId = parseId(req.params.id);
+  const commentId = parseId(req.params.commentId);
+  if (postId === null || commentId === null) {
+    return res.status(404).json({ error: "Not found." });
+  }
+
+  try {
+    deleteComment(actorOf(req), postId, commentId);
+    res.status(204).end();
+  } catch (err) {
+    if (err instanceof CommentError) return res.status(err.status).json({ error: err.message });
     throw err;
   }
 });

@@ -59,6 +59,21 @@ export const config = {
   clientOrigins,
 
   /**
+   * The host this app is actually reached at, e.g. "snapsher.example.com".
+   *
+   * The same-origin check in security.ts otherwise compares the `Origin` header
+   * against the `Host` header — two values that arrive in the same request and
+   * are both written by whoever sent it. Setting this replaces the second half
+   * of that comparison with something the attacker does not control, which
+   * matters because that check is the *only* CSRF defence on sign-in and
+   * sign-up: there is no session yet, so there is no token to demand.
+   *
+   * Optional, and unset falls back to the `Host` header, so forgetting it
+   * degrades to the previous behaviour rather than locking everyone out.
+   */
+  publicHost: process.env.PUBLIC_HOST?.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "") || "",
+
+  /**
    * Browsers only accept `Secure` cookies over HTTPS. The tunnel terminates
    * TLS upstream and speaks plain HTTP to us, so this is a deliberate config
    * value rather than something sniffed from the request — see the note in
@@ -90,6 +105,28 @@ export const config = {
     signUp: { windowMs: HOUR, max: 5 },
     createPost: { windowMs: HOUR, max: 10 },
     updateAvatar: { windowMs: HOUR, max: 20 },
+    /**
+     * Sending a request is otherwise unbounded: the 409 that stops a repeat
+     * send is cleared by cancelling the request, and cancelling is something
+     * the sender may do, so send → cancel → send loops forever. Thirty an hour
+     * is far past what adding your actual friends takes.
+     */
+    friendRequest: { windowMs: HOUR, max: 30 },
+    /** Every like is a write plus a JOIN; a hundred an hour is generous for a feed of 100. */
+    like: { windowMs: HOUR, max: 300 },
+    /**
+     * Writing a comment, not reading one. Reads stay on the shared API budget
+     * because opening a few threads while scrolling a feed is ordinary use;
+     * writing sixty an hour is not, on an app whose whole premise is one photo
+     * every twelve hours.
+     */
+    createComment: { windowMs: HOUR, max: 60 },
+    /**
+     * Each search is a leading-wildcard LIKE, which SQLite can only answer with
+     * a full scan of the users table. The client debounces to one per 250ms,
+     * so this only ever binds on something that isn't the client.
+     */
+    userSearch: { windowMs: 15 * MINUTE, max: 120 },
   },
 
   /**
@@ -97,10 +134,22 @@ export const config = {
    * account's owner: anyone who knows the address can burn five attempts and
    * lock the real user out, repeatedly, even with the correct password.
    *
-   * The tight lock is therefore scoped to one account *from one address*, so
-   * an attacker only locks themselves out. The account-wide lock survives as a
-   * much higher backstop against a distributed guessing campaign, at a
-   * threshold no ordinary person reaches by mistyping.
+   * `perIp` is therefore the barrier, and it is scoped to one account *from
+   * one address*, so an attacker only locks themselves out.
+   *
+   * `perAccount` counts failures across every address at once, but auth.ts
+   * refuses on it only when the presented password is *also* wrong — a correct
+   * password signs in regardless of it. It has to work that way: at 50
+   * failures an hour, roughly ten source addresses can hold an account-wide
+   * lock open indefinitely, and if that lock refused outright it would be a
+   * remote denial of service against any account whose email address is known.
+   *
+   * The honest consequence is that `perAccount` no longer slows a distributed
+   * campaign down; it tells the owner one is happening, and what actually
+   * bounds the guessing rate is `perIp` together with the `signIn` limiter
+   * above. Those are per-address too, so the real defence against a large
+   * botnet is password strength, which is why the rules are enforced at
+   * sign-up rather than treated as advice.
    */
   lockout: {
     perIp: { maxFailures: 5, windowMs: 15 * MINUTE, lockMs: 15 * MINUTE },
@@ -111,5 +160,32 @@ export const config = {
 if (isProd && !config.cookieSecure) {
   console.warn(
     "[config] COOKIE_SECURE is off in production — session cookies will be sent over plain HTTP.",
+  );
+}
+
+/**
+ * The one combination that must never be true on the homeserver: plain-HTTP
+ * cookies *and* a socket answering on more than loopback. That is a session
+ * readable by anyone on the LAN or the tailnet, reached without passing through
+ * Cloudflare or its TLS at all.
+ *
+ * Every part of the safe posture — the loopback bind, `Secure` cookies, HSTS —
+ * is derived from `NODE_ENV`, so a PM2 restart that loses that one variable
+ * silently produces exactly this state. It is also, unavoidably, what ordinary
+ * development looks like, since dev binds broadly on purpose so the app can be
+ * opened from a phone. There is no way to tell the two apart from inside the
+ * process, so this warns rather than exits: taking the site down over a
+ * mistyped variable would be the worse failure.
+ */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+
+if (!config.cookieSecure && !LOOPBACK_HOSTS.has(config.host)) {
+  console.error(
+    "\n" +
+      "!!  [config] Serving insecure cookies on a non-loopback address\n" +
+      `!!  bind=${config.host || "0.0.0.0 (all interfaces)"} cookieSecure=false NODE_ENV=${process.env.NODE_ENV ?? "(unset)"}\n` +
+      "!!  Expected while developing. On the homeserver it means NODE_ENV never reached\n" +
+      "!!  this process: sessions are being served in the clear to the whole network,\n" +
+      "!!  bypassing Cloudflare. Set NODE_ENV=production (or HOST and COOKIE_SECURE).\n",
   );
 }

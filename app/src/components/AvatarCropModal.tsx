@@ -39,11 +39,13 @@ type AvatarCropModalProps = {
  */
 export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropModalProps) {
   const imgRef = useRef<HTMLImageElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
   const [frame, setFrame] = useState<Frame | null>(null);
   const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(null);
   const [minScale, setMinScale] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const dragState = useRef<{ pointerId: number; startX: number; startY: number; frame: Frame } | null>(
     null,
   );
@@ -52,6 +54,13 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
     const img = imgRef.current;
     if (!img) return;
     const { naturalWidth, naturalHeight } = img;
+    // A decoded image with no dimensions can't be cropped and would divide by
+    // zero below, so it is treated as a failed load rather than a usable one.
+    if (!naturalWidth || !naturalHeight) {
+      setLoadError("Couldn't read that photo. Try a different one.");
+      return;
+    }
+    setLoadError(null);
     setNaturalSize({ width: naturalWidth, height: naturalHeight });
     const cover = Math.max(VIEWPORT / naturalWidth, VIEWPORT / naturalHeight);
     setMinScale(cover);
@@ -67,6 +76,17 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
       ),
     );
   }, []);
+
+  /**
+   * A cached image can finish decoding before React attaches `onLoad`, and that
+   * event never fires retroactively — leaving `frame` null, the image hidden
+   * and Confirm disabled forever, with nothing on screen explaining why.
+   * `complete` is the state that `onLoad` would have announced, so check for it
+   * once on mount and run the same handler.
+   */
+  useEffect(() => {
+    if (imgRef.current?.complete) handleImageLoad();
+  }, [handleImageLoad]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -103,34 +123,58 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
     setDragging(false);
   }
 
-  function rescale(nextScale: number) {
-    const img = imgRef.current;
-    if (!frame || !img) return;
-    const { naturalWidth, naturalHeight } = img;
-    // Keep the point at the viewport's center fixed in image-space while the
-    // zoom level changes, instead of re-centering on every slider nudge.
-    const centerX = (VIEWPORT / 2 - frame.left) / frame.scale;
-    const centerY = (VIEWPORT / 2 - frame.top) / frame.scale;
-    setFrame(
-      clampFrame(
-        {
-          scale: nextScale,
-          left: VIEWPORT / 2 - centerX * nextScale,
-          top: VIEWPORT / 2 - centerY * nextScale,
-        },
-        naturalWidth,
-        naturalHeight,
-      ),
-    );
-  }
+  // Memoised only so the wheel effect below can depend on it honestly rather
+  // than close over a stale copy; the slider calls the same function.
+  const rescale = useCallback(
+    (nextScale: number) => {
+      const img = imgRef.current;
+      if (!frame || !img) return;
+      const { naturalWidth, naturalHeight } = img;
+      // Keep the point at the viewport's center fixed in image-space while the
+      // zoom level changes, instead of re-centering on every slider nudge.
+      const centerX = (VIEWPORT / 2 - frame.left) / frame.scale;
+      const centerY = (VIEWPORT / 2 - frame.top) / frame.scale;
+      setFrame(
+        clampFrame(
+          {
+            scale: nextScale,
+            left: VIEWPORT / 2 - centerX * nextScale,
+            top: VIEWPORT / 2 - centerY * nextScale,
+          },
+          naturalWidth,
+          naturalHeight,
+        ),
+      );
+    },
+    [frame],
+  );
 
-  function handleWheel(e: React.WheelEvent<HTMLDivElement>) {
-    if (!frame) return;
-    e.preventDefault();
-    const maxScale = minScale * MAX_ZOOM_MULTIPLIER;
-    const next = Math.min(maxScale, Math.max(minScale, frame.scale * (1 - e.deltaY * 0.001)));
-    rescale(next);
-  }
+  /**
+   * Wheel-zoom has to be a hand-attached native listener rather than an
+   * `onWheel` prop. React registers `wheel` at the root container as a
+   * *passive* listener, which makes `preventDefault()` on its synthetic event a
+   * silent no-op — the image zoomed and the page behind the modal scrolled at
+   * the same time, logging a console warning on every notch. `passive: false`
+   * is the only thing that can cancel the scroll.
+   *
+   * Re-subscribing whenever the zoom inputs change is deliberate: the handler
+   * reads `frame` and `minScale`, so the listener and the function it calls
+   * always agree about the current zoom.
+   */
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || !frame) return;
+
+    function onWheel(e: WheelEvent) {
+      if (!frame) return;
+      e.preventDefault();
+      const maxScale = minScale * MAX_ZOOM_MULTIPLIER;
+      rescale(Math.min(maxScale, Math.max(minScale, frame.scale * (1 - e.deltaY * 0.001))));
+    }
+
+    viewport.addEventListener("wheel", onWheel, { passive: false });
+    return () => viewport.removeEventListener("wheel", onWheel);
+  }, [frame, minScale, rescale]);
 
   function handleConfirm() {
     const img = imgRef.current;
@@ -174,19 +218,22 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
         </p>
 
         <div
+          ref={viewportRef}
           className="relative touch-none select-none overflow-hidden rounded-2xl bg-neutral-800"
           style={{ width: VIEWPORT, height: VIEWPORT }}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
-          onWheel={handleWheel}
         >
           <img
             ref={imgRef}
             src={imageUrl}
             alt=""
             onLoad={handleImageLoad}
+            // A file the browser can't decode would otherwise leave a hidden
+            // image and a disabled Confirm with nothing explaining why.
+            onError={() => setLoadError("Couldn't read that photo. Try a different one.")}
             draggable={false}
             className="absolute left-0 top-0 max-w-none origin-top-left cursor-grab active:cursor-grabbing"
             style={
@@ -223,6 +270,8 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
             }}
           />
         </div>
+
+        {loadError && <p className="text-center text-xs text-red-400">{loadError}</p>}
 
         <input
           type="range"

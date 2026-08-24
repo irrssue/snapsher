@@ -91,8 +91,31 @@ db.exec(`
   )
 `);
 
+/**
+ * One row per comment. Unlike `likes` there is no natural key to collapse on —
+ * the same person may say two different things — so this is an ordinary
+ * autoincrement table.
+ *
+ * Nothing here counts. `about.md` excludes comment counts as deliberately as it
+ * excludes like counts, so no query in the app may aggregate this table; the
+ * only way its size is ever observable is by reading the comments themselves,
+ * which is exactly the same rule `likers` follows.
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )
+`);
+
 db.exec(
   "CREATE INDEX IF NOT EXISTS idx_posts_user_created ON posts (user_id, created_at DESC)",
+);
+db.exec(
+  "CREATE INDEX IF NOT EXISTS idx_comments_post_created ON comments (post_id, created_at)",
 );
 db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions (expires_at)");
@@ -104,26 +127,56 @@ db.exec(
 );
 
 /**
- * Unique indexes that can fail on data that predates them, so each is reported
- * and skipped rather than taking the server down at boot.
+ * Unique indexes that can fail on data that predates them.
  *
  * The case-insensitive pair matters because `UNIQUE` on the column itself is
  * case-sensitive, which would let `Ada@example.com` register alongside
  * `ada@example.com` and let one account impersonate another by casing alone.
+ *
+ * The normalised friendship pair covers what `(requester_id, addressee_id)`
+ * cannot: that index sees A→B and B→A as different rows, so both can exist and
+ * `listFriends` then returns the same person twice. Ordering the two ids by
+ * MIN/MAX collapses a friendship to one key whichever way round it was made.
+ *
+ * `required` is what separates a degraded read from a wrong one. A duplicate
+ * photo filename or a doubled friendship is visible and annoying; two users
+ * differing only in the casing of their email means `findUserByEmail`'s
+ * `COLLATE NOCASE` lookup returns an arbitrary one of them, and a sign-in
+ * silently lands in the wrong account. That is not something to log and carry
+ * on from, so those two take the boot down until the duplicates are resolved.
  */
-for (const [name, sql] of [
-  ["posts.photo_file", "CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_photo_file ON posts (photo_file)"],
-  ["users.email", "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_nocase ON users (email COLLATE NOCASE)"],
-  ["users.username", "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_nocase ON users (username COLLATE NOCASE)"],
-  ["friend_requests.pair", "CREATE UNIQUE INDEX IF NOT EXISTS idx_friend_requests_pair ON friend_requests (requester_id, addressee_id)"],
+for (const { name, sql, required } of [
+  { name: "posts.photo_file", required: false, sql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_photo_file ON posts (photo_file)" },
+  { name: "users.email", required: true, sql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_nocase ON users (email COLLATE NOCASE)" },
+  { name: "users.username", required: true, sql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_nocase ON users (username COLLATE NOCASE)" },
+  { name: "friend_requests.pair", required: false, sql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_friend_requests_pair ON friend_requests (requester_id, addressee_id)" },
+  { name: "friend_requests.normalised_pair", required: false, sql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_friend_requests_pair_normalised ON friend_requests (MIN(requester_id, addressee_id), MAX(requester_id, addressee_id))" },
 ] as const) {
   try {
     db.exec(sql);
-  } catch {
+  } catch (err) {
+    if (required) {
+      throw new Error(
+        `[db] Could not add the unique index on ${name} — the table already holds rows that collide there. ` +
+          `Refusing to start: with duplicates present a lookup on that column returns an arbitrary one of them, ` +
+          `which means signing in to the wrong account. Resolve the duplicates and restart.`,
+        { cause: err },
+      );
+    }
     console.warn(
       `[db] Could not add the unique index on ${name} — the table already holds duplicate rows. Resolve them and restart; until then uniqueness is not enforced there.`,
     );
   }
+}
+
+/**
+ * Distinguishes "that row already exists" from every other way a write can
+ * fail. Anything else — a locked database, a full disk — has to keep its own
+ * identity and reach the error handler, because reporting it as a duplicate
+ * buries a real fault under a message the user can do nothing about.
+ */
+export function isUniqueConstraintError(err: unknown): boolean {
+  return String((err as { code?: string })?.code ?? "").startsWith("SQLITE_CONSTRAINT");
 }
 
 export type UserRow = {
@@ -146,6 +199,14 @@ export type PostRow = {
 export type LikeRow = {
   post_id: number;
   user_id: number;
+  created_at: number;
+};
+
+export type CommentRow = {
+  id: number;
+  post_id: number;
+  user_id: number;
+  body: string;
   created_at: number;
 };
 

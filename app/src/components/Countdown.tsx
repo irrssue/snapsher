@@ -1,7 +1,14 @@
 import { formatRemaining, useNow } from "../time";
 
-export function Countdown({ nextAllowedAt }: { nextAllowedAt: number | null }) {
-  const now = useNow();
+export function Countdown({
+  nextAllowedAt,
+  clockOffset,
+}: {
+  nextAllowedAt: number | null;
+  /** Added to the local clock so this counts down in the server's time, not the device's. */
+  clockOffset: number;
+}) {
+  const now = useNow() + clockOffset;
 
   // Null means the window couldn't be read, which is not the same as "go
   // ahead" — saying so beats counting down from a number we don't have.

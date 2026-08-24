@@ -14,13 +14,32 @@ import {
 
 type SubTab = "friends" | "requests" | "add";
 
-export function FriendsTab() {
+type FriendsTabProps = {
+  /**
+   * Called after a change that alters whose posts the signed-in user may see.
+   * The feed lives in a sibling component that nothing here remounts, so
+   * without this a newly accepted friend's posts never arrive and a removed
+   * one's stay on screen with their photos 404ing.
+   */
+  onFriendsChanged: () => void;
+};
+
+function byUsername(a: Friend, b: Friend) {
+  return a.username.localeCompare(b.username);
+}
+
+export function FriendsTab({ onFriendsChanged }: FriendsTabProps) {
   const [subTab, setSubTab] = useState<SubTab>("friends");
   const [friends, setFriends] = useState<Friend[]>([]);
   const [requests, setRequests] = useState<FriendRequest[]>([]);
+  /** The lists couldn't be fetched at all — so an empty list means nothing yet. */
+  const [loadError, setLoadError] = useState<string | null>(null);
+  /** One action failed; the lists themselves are still good. */
+  const [actionError, setActionError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [discoverQuery, setDiscoverQuery] = useState("");
   const [discoverableUsers, setDiscoverableUsers] = useState<Friend[]>([]);
+  const [searching, setSearching] = useState(false);
   const [sentRequests, setSentRequests] = useState<number[]>([]);
 
   useEffect(() => {
@@ -30,8 +49,15 @@ export function FriendsTab() {
         if (!active) return;
         setFriends(nextFriends);
         setRequests(nextRequests);
+        setLoadError(null);
       })
-      .catch(() => undefined);
+      .catch((err) => {
+        // Swallowing this left the empty list rendering "No friends yet.",
+        // which is indistinguishable from genuinely having none — and offers
+        // nothing to retry.
+        if (!active) return;
+        setLoadError(err instanceof Error ? err.message : "Couldn't load your friends.");
+      });
     return () => {
       active = false;
     };
@@ -41,17 +67,30 @@ export function FriendsTab() {
     const trimmed = discoverQuery.trim();
     if (!trimmed) {
       setDiscoverableUsers([]);
+      setSearching(false);
       return;
     }
 
     let active = true;
+    // Raised before the debounce rather than when the request goes out: the
+    // 250ms wait is just as much "the answer isn't known yet" as the request
+    // is, and the empty state rendered during it flashed "No one matches" on
+    // every keystroke.
+    setSearching(true);
     const timer = setTimeout(() => {
       searchUsers(trimmed)
         .then((users) => {
-          if (active) setDiscoverableUsers(users);
+          if (!active) return;
+          setDiscoverableUsers(users);
+          setActionError(null);
         })
-        .catch(() => {
-          if (active) setDiscoverableUsers([]);
+        .catch((err) => {
+          if (!active) return;
+          setDiscoverableUsers([]);
+          setActionError(err instanceof Error ? err.message : "Couldn't search right now.");
+        })
+        .finally(() => {
+          if (active) setSearching(false);
         });
     }, 250);
 
@@ -62,38 +101,77 @@ export function FriendsTab() {
   }, [discoverQuery]);
 
   async function handleSendFriendRequest(id: number) {
+    setActionError(null);
     setSentRequests((current) => (current.includes(id) ? current : [...current, id]));
     try {
       await sendFriendRequest(id);
-    } catch {
+    } catch (err) {
+      // The button flipping from "Requested" back to "Add" on its own reads as
+      // a glitch; say what happened alongside it.
       setSentRequests((current) => current.filter((sentId) => sentId !== id));
+      setActionError(err instanceof Error ? err.message : "Couldn't send that request.");
     }
   }
 
-  async function handleRemoveFriend(id: number) {
-    setFriends((current) => current.filter((f) => f.id !== id));
-    await removeFriend(id).catch(() => undefined);
+  async function handleRemoveFriend(friend: Friend) {
+    setActionError(null);
+    setFriends((current) => current.filter((f) => f.id !== friend.id));
+    try {
+      await removeFriend(friend.id);
+      // Their posts have to leave the feed along with them.
+      onFriendsChanged();
+    } catch (err) {
+      // The server still has the friendship, so put the row back rather than
+      // leaving the UI asserting a removal that never happened.
+      setFriends((current) =>
+        current.some((f) => f.id === friend.id) ? current : [...current, friend].sort(byUsername),
+      );
+      setActionError(err instanceof Error ? err.message : "Couldn't remove that friend.");
+    }
   }
 
   async function handleAcceptRequest(request: FriendRequest) {
+    setActionError(null);
     setRequests((current) => current.filter((r) => r.id !== request.id));
-    setFriends((current) => [
-      ...current,
-      { id: request.id, username: request.username, avatarUrl: request.avatarUrl },
-    ]);
+    setFriends((current) =>
+      [
+        ...current,
+        // `request.userId`, never `request.id`: the latter identifies the
+        // request row, and the two tables hand out the same numbers. Using it
+        // here pointed the new row at whichever *user* happened to share that
+        // id, so Remove unfriended a stranger.
+        { id: request.userId, username: request.username, avatarUrl: request.avatarUrl },
+      ].sort(byUsername),
+    );
     try {
       await acceptFriendRequest(request.id);
-      // The request id is the friend_requests row id, not the friend's user
-      // id, so the freshly-accepted friend's real id comes from a refetch.
-      fetchFriends().then(setFriends).catch(() => undefined);
-    } catch {
-      fetchFriendRequests().then(setRequests).catch(() => undefined);
+      // Their posts should show up in the feed without waiting for a reload.
+      onFriendsChanged();
+    } catch (err) {
+      // Both lists are now guesses. The friend entry especially: nothing else
+      // in this component would ever correct it, so a tab that loses the race
+      // to another one kept a phantom friend until a full page reload.
+      fetchFriends()
+        .then(setFriends)
+        .catch(() => undefined);
+      fetchFriendRequests()
+        .then(setRequests)
+        .catch(() => undefined);
+      setActionError(err instanceof Error ? err.message : "Couldn't accept that request.");
     }
   }
 
-  async function handleDeclineRequest(id: number) {
-    setRequests((current) => current.filter((r) => r.id !== id));
-    await declineFriendRequest(id).catch(() => undefined);
+  async function handleDeclineRequest(request: FriendRequest) {
+    setActionError(null);
+    setRequests((current) => current.filter((r) => r.id !== request.id));
+    try {
+      await declineFriendRequest(request.id);
+    } catch (err) {
+      setRequests((current) =>
+        current.some((r) => r.id === request.id) ? current : [...current, request],
+      );
+      setActionError(err instanceof Error ? err.message : "Couldn't decline that request.");
+    }
   }
 
   const filteredFriends = friends.filter((f) =>
@@ -151,6 +229,10 @@ export function FriendsTab() {
         </button>
       </div>
 
+      {(loadError ?? actionError) && (
+        <p className="text-center text-sm text-red-400">{loadError ?? actionError}</p>
+      )}
+
       {subTab === "friends" ? (
         <div className="flex flex-col gap-6">
           <input
@@ -179,7 +261,7 @@ export function FriendsTab() {
 
                 <button
                   type="button"
-                  onClick={() => handleRemoveFriend(friend.id)}
+                  onClick={() => handleRemoveFriend(friend)}
                   className="shrink-0 rounded-full bg-neutral-800 px-4 py-1.5 text-xs text-neutral-300 transition-colors hover:text-white"
                 >
                   Remove
@@ -187,7 +269,9 @@ export function FriendsTab() {
               </div>
             ))}
 
-            {filteredFriends.length === 0 && (
+            {/* Suppressed while `loadError` stands: an empty list there means
+                the fetch failed, not that there is nobody to show. */}
+            {filteredFriends.length === 0 && !loadError && (
               <p className="pt-8 text-center text-sm text-neutral-500">
                 {friends.length === 0 ? "No friends yet." : `No one matches "${query}".`}
               </p>
@@ -214,7 +298,7 @@ export function FriendsTab() {
               <div className="flex shrink-0 items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => handleDeclineRequest(request.id)}
+                  onClick={() => handleDeclineRequest(request)}
                   className="rounded-full bg-neutral-800 px-4 py-1.5 text-xs text-neutral-300 transition-colors hover:text-white"
                 >
                   Decline
@@ -230,7 +314,7 @@ export function FriendsTab() {
             </div>
           ))}
 
-          {requests.length === 0 && (
+          {requests.length === 0 && !loadError && (
             <p className="pt-8 text-center text-sm text-neutral-500">No pending requests.</p>
           )}
         </div>
@@ -284,7 +368,9 @@ export function FriendsTab() {
               );
             })}
 
-            {discoverableUsers.length === 0 && (
+            {/* `searching` covers both the debounce and the request in flight,
+                so "No one matches" is only ever an answer, never a guess. */}
+            {discoverableUsers.length === 0 && !searching && (
               <p className="pt-8 text-center text-sm text-neutral-500">
                 {discoverQuery.trim()
                   ? `No one matches "${discoverQuery}".`

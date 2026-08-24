@@ -26,7 +26,11 @@ if (config.clientOrigins.length > 0) {
     cors({
       origin: config.clientOrigins,
       credentials: true,
-      methods: ["GET", "POST", "OPTIONS"],
+      // Must list every method the SPA actually issues: the avatar upload is a
+      // PUT and un-friending is a DELETE, and a preflight that doesn't see them
+      // here is refused outright. Same-origin production never reaches this,
+      // which is exactly why the omission stayed invisible.
+      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "X-CSRF-Token"],
       maxAge: 600,
     }),

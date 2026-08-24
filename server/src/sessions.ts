@@ -5,17 +5,46 @@ import { db, type SessionRow, type UserRow } from "./db.js";
 import { SAFE_METHODS } from "./security.js";
 import { avatarUrlFor } from "./avatarsStore.js";
 
-const SESSION_COOKIE = "sid";
+/**
+ * `__Host-` is a promise the browser enforces on our behalf: a cookie with that
+ * prefix is only accepted with `Secure`, `Path=/` and no `Domain`, which means
+ * no other host — including a sibling subdomain — can write one. Without it,
+ * such a host can set a plain `sid` scoped to a narrower path like `/api`.
+ * Browsers send more specific paths first, `readCookie` below takes the first
+ * match, and that shadow cookie would then stand in for the real session on
+ * every API call, with `startSession` unable to displace it because it writes
+ * at `/`.
+ *
+ * The prefix is inseparable from `Secure`, so it can only be used when
+ * `config.cookieSecure` is on. Over plain HTTP — local development — a
+ * `Set-Cookie` naming a `__Host-` cookie is dropped by the browser entirely,
+ * with no error and no session, so those environments keep the bare names. The
+ * shadowing this defends against needs a sibling subdomain to exist, which on
+ * localhost it does not.
+ */
+const HOST_PREFIX = config.cookieSecure ? "__Host-" : "";
+
+const SESSION_COOKIE = `${HOST_PREFIX}sid`;
 /**
  * Readable by the SPA on purpose: it has to echo this value back in a header,
  * which an attacker on another origin cannot do. The session cookie itself
  * stays `httpOnly`.
  */
-const CSRF_COOKIE = "csrf";
+const CSRF_COOKIE = `${HOST_PREFIX}csrf`;
 const CSRF_HEADER = "x-csrf-token";
 
-/** Cookies the previous cookie-session implementation left in browsers. */
-const LEGACY_COOKIES = ["session", "session.sig"];
+/**
+ * Cookies to sweep out of browsers that still hold them: the two the previous
+ * cookie-session implementation left behind, plus — where the prefixed names
+ * are in use — the unprefixed ones this server itself used to set. Guarded on
+ * the prefix, because without it these *are* the live names and clearing them
+ * would sign the user out on the very request that signed them in.
+ */
+const LEGACY_COOKIES = [
+  "session",
+  "session.sig",
+  ...(HOST_PREFIX ? ["sid", "csrf"] : []),
+];
 
 export type PublicUser = {
   id: number;

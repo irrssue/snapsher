@@ -9,6 +9,12 @@ type ComposeModalProps = {
   username: string;
   /** Null when the posting window couldn't be read — treated as "not yet". */
   nextAllowedAt: number | null;
+  /**
+   * Added to the local clock so the window is judged in the server's time. The
+   * server rejects the post on its own clock regardless, so a device running
+   * fast would otherwise enable Share early and collect a 429.
+   */
+  clockOffset: number;
   onClose: () => void;
   onShare: (input: { photo: string; description: string }) => Promise<void>;
 };
@@ -16,10 +22,11 @@ type ComposeModalProps = {
 export function ComposeModal({
   username,
   nextAllowedAt,
+  clockOffset,
   onClose,
   onShare,
 }: ComposeModalProps) {
-  const now = useNow();
+  const now = useNow() + clockOffset;
   const canPost = nextAllowedAt !== null && now >= nextAllowedAt;
   const [photo, setPhoto] = useState<string | null>(null);
   const [description, setDescription] = useState("");

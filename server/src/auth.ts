@@ -4,7 +4,7 @@ import path from "node:path";
 import express, { Router } from "express";
 import bcrypt from "bcryptjs";
 import { config } from "./config.js";
-import { db, type UserRow } from "./db.js";
+import { db, isUniqueConstraintError, type UserRow } from "./db.js";
 import { createLockout, rateLimit, rejectLocked } from "./rateLimit.js";
 import { asyncRoute } from "./security.js";
 import { endSession, requireAuth, startSession, toPublicUser } from "./sessions.js";
@@ -76,10 +76,6 @@ function passwordEchoesIdentity(password: string, username: string, email: strin
   );
 }
 
-function isUniqueConstraintError(err: unknown): boolean {
-  return String((err as { code?: string })?.code ?? "").startsWith("SQLITE_CONSTRAINT");
-}
-
 async function verifyPassword(password: string, hash: string): Promise<boolean> {
   try {
     return await bcrypt.compare(password, hash);
@@ -135,28 +131,55 @@ authRouter.post(
     const normalized = normalizeEmail(email);
     const perIpKey = `${normalized}|${req.ip ?? "unknown"}`;
 
-    const lockedFor = Math.max(
-      lockoutByIp.retryAfterMs(perIpKey),
-      lockoutByAccount.retryAfterMs(normalized),
-    );
-    if (lockedFor > 0) return rejectLocked(res, lockedFor);
+    // Only the per-IP lock refuses outright. It is scoped to one account from
+    // one address, so the only person it can shut out is whoever produced the
+    // failures. The account-wide lock is deliberately *not* consulted here —
+    // see below, and the rationale in config.ts.
+    const perIpLockedFor = lockoutByIp.retryAfterMs(perIpKey);
+    if (perIpLockedFor > 0) return rejectLocked(res, perIpLockedFor);
 
     const user = findUserByEmail(normalized);
     if (!user) {
       // Keep the timing in line with the branch that does hash a password.
       await verifyPassword(password, DUMMY_HASH);
+      // ...and keep the *cost* in line with it too. Which branch you landed on
+      // is unavoidably visible — the flow's whole premise is telling the user
+      // whether they're signing in or signing up — so the defence can't be to
+      // hide it, only to make finding out as expensive as guessing a password.
+      // Without this, a mailing list could be walked for free forever.
+      lockoutByIp.recordFailure(perIpKey);
+
+      // The password rules are checked here, on the branch that is about to
+      // create an account, so "Password must be at least 8 characters" is
+      // answered while the password field is still on screen. Left to /signup
+      // it surfaces on the username step, which has no password field to fix.
+      const checked = validatePassword(password);
+      if (!checked.ok) return res.status(400).json({ error: checked.error });
+
       return res.json({ needsUsername: true });
     }
 
     if (!(await verifyPassword(password, user.password_hash))) {
       lockoutByIp.recordFailure(perIpKey);
       lockoutByAccount.recordFailure(normalized);
+
+      // A wrong password under the account-wide lock is still refused, and
+      // says so; a correct one, checked above, is not affected by that lock at
+      // all. That asymmetry is the point: the lock has to be unable to keep
+      // the account's own owner out.
+      const accountLockedFor = lockoutByAccount.retryAfterMs(normalized);
+      if (accountLockedFor > 0) return rejectLocked(res, accountLockedFor);
+
       return res.status(401).json(INVALID_CREDENTIALS);
     }
 
-    // Only the address that proved the password gets its counter reset, so a
-    // successful sign-in can't be used to wipe an attacker's slate elsewhere.
+    // Proving the password clears both counters. Only the address that proved
+    // it gets the per-IP counter reset, so a successful sign-in can't be used
+    // to wipe an attacker's slate at some other address — but the account-wide
+    // counter has to go, or an attacker's failures accumulate on the owner's
+    // account with nothing but a restart able to remove them.
     lockoutByIp.clear(perIpKey);
+    lockoutByAccount.clear(normalized);
     await upgradeHashIfStale(user, password);
     startSession(req, res, user.id);
     res.json({ user: toPublicUser(user) });
@@ -240,7 +263,7 @@ authRouter.put(
   rateLimit(config.rateLimits.updateAvatar),
   // Arrives as a base64 data URL in the JSON body, same as a post's photo.
   express.json({ limit: "6mb" }),
-  (req, res) => {
+  asyncRoute(async (req, res) => {
     const { photo } = req.body ?? {};
 
     if (typeof photo !== "string") {
@@ -272,15 +295,28 @@ authRouter.put(
     )?.avatar_file;
 
     const avatarFile = `${crypto.randomUUID()}.${EXTENSION_BY_FORMAT[declaredFormat as ImageFormat]}`;
-    fs.writeFileSync(path.join(avatarsDir, avatarFile), bytes, { mode: 0o640 });
+    const avatarPath = path.join(avatarsDir, avatarFile);
+    // Written asynchronously: a synchronous write of up to 4 MB blocks the
+    // event loop for its whole duration, which stalls every other request in
+    // flight — including the feed loads of everyone else on the server.
+    await fs.promises.writeFile(avatarPath, bytes, { mode: 0o640 });
 
-    db.prepare("UPDATE users SET avatar_file = ? WHERE id = ?").run(avatarFile, user.id);
+    try {
+      db.prepare("UPDATE users SET avatar_file = ? WHERE id = ?").run(avatarFile, user.id);
+    } catch (err) {
+      // Don't leave an orphaned file behind if the row never landed — nothing
+      // else ever refers to this filename, so it would sit there forever.
+      await fs.promises.rm(avatarPath, { force: true });
+      throw err;
+    }
 
+    // Only once the row points at the new file is the old one unreferenced and
+    // safe to drop.
     if (previousAvatarFile) {
-      fs.rmSync(path.join(avatarsDir, previousAvatarFile), { force: true });
+      await fs.promises.rm(path.join(avatarsDir, previousAvatarFile), { force: true });
     }
 
     const updated = db.prepare("SELECT * FROM users WHERE id = ?").get(user.id) as UserRow;
     res.json({ user: toPublicUser(updated) });
-  },
+  }),
 );

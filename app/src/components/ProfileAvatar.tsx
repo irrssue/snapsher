@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { updateAvatar } from "../api/auth";
 import { AvatarCropModal } from "./AvatarCropModal";
 import { PencilIcon, PersonIcon } from "./icons";
@@ -25,8 +25,18 @@ export function ProfileAvatar({ user, onAvatarChange }: ProfileAvatarProps) {
     setPickedImageUrl(URL.createObjectURL(file));
   }
 
+  /**
+   * Closing the cropper is not the only way it goes away: a session that ends
+   * mid-crop unmounts this whole tree (see the sign-out listener in App), and
+   * the object URL would then be held for the life of the document. Tying the
+   * revoke to the URL's own lifetime covers both exits with one rule.
+   */
+  useEffect(() => {
+    if (!pickedImageUrl) return;
+    return () => URL.revokeObjectURL(pickedImageUrl);
+  }, [pickedImageUrl]);
+
   function closeCropper() {
-    if (pickedImageUrl) URL.revokeObjectURL(pickedImageUrl);
     setPickedImageUrl(null);
   }
 

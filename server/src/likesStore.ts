@@ -1,6 +1,6 @@
 import { db } from "./db.js";
 import { avatarUrlFor } from "./avatarsStore.js";
-import { friendIdsFor } from "./friendsStore.js";
+import { areFriends } from "./friendsStore.js";
 
 /**
  * Row-level access control for likes, on the same principle as postsStore and
@@ -40,6 +40,7 @@ const insertLike = db.prepare(
   "INSERT OR IGNORE INTO likes (post_id, user_id, created_at) VALUES (?, ?, ?)",
 );
 const deleteLike = db.prepare("DELETE FROM likes WHERE post_id = ? AND user_id = ?");
+const countLikes = db.prepare("SELECT COUNT(*) AS count FROM likes WHERE post_id = ?");
 const selectLikers = db.prepare(`
   SELECT users.id, users.username, users.avatar_file
     FROM likes
@@ -52,33 +53,47 @@ const selectLikers = db.prepare(`
 function assertCanView(actor: Actor, postId: number): number {
   const post = selectPostAuthor.get(postId) as { user_id: number } | undefined;
   if (!post) throw new LikeError("That post doesn't exist.", 404);
-  if (post.user_id !== actor.userId && !friendIdsFor(actor).includes(post.user_id)) {
+  if (post.user_id !== actor.userId && !areFriends(actor, post.user_id)) {
     throw new LikeError("That post doesn't exist.", 404);
   }
   return post.user_id;
 }
 
-export function toggleLike(actor: Actor, postId: number): { liked: boolean } {
+/**
+ * `count` comes back only when the actor is the post's own author, on the same
+ * rule as `likersFor` below: a like count is the author's to see and nobody
+ * else's. The author does need it here, though — their own tap changes a number
+ * already on their screen, and without a server-sourced value the optimistic
+ * count drifts from reality the moment anyone else likes the same post.
+ */
+export function toggleLike(actor: Actor, postId: number): { liked: boolean; count?: number } {
   assertActor(actor);
-  assertCanView(actor, postId);
+  const authorId = assertCanView(actor, postId);
+  const isAuthor = authorId === actor.userId;
 
-  if (selectLike.get(postId, actor.userId)) {
+  const liked = !selectLike.get(postId, actor.userId);
+  if (liked) {
+    insertLike.run(postId, actor.userId, Date.now());
+  } else {
     deleteLike.run(postId, actor.userId);
-    return { liked: false };
   }
-  insertLike.run(postId, actor.userId, Date.now());
-  return { liked: true };
+
+  if (!isAuthor) return { liked };
+  const { count } = countLikes.get(postId) as { count: number };
+  return { liked, count };
 }
 
 /**
- * The full "who liked this" list, restricted to the post's own author — this
- * is the one place in the app that reveals like counts at all, and it's
- * deliberately not reachable for anyone else, friend or not.
+ * The full "who liked this" list, restricted to the post's own author and
+ * deliberately not reachable for anyone else, friend or not. Naming the
+ * individual likers is something only this function ever does; a bare count
+ * reaches the author by two other routes (`PublicPost.likeCount` on the feed
+ * and `toggleLike` above), and never reaches anybody else by any of them.
  */
 export function likersFor(actor: Actor, postId: number): PublicLiker[] {
   assertActor(actor);
-  const authorId = selectPostAuthor.get(postId) as { user_id: number } | undefined;
-  if (!authorId || authorId.user_id !== actor.userId) {
+  const post = selectPostAuthor.get(postId) as { user_id: number } | undefined;
+  if (!post || post.user_id !== actor.userId) {
     throw new LikeError("That post doesn't exist.", 404);
   }
   const rows = selectLikers.all(postId) as {
@@ -96,6 +111,31 @@ export function likersFor(actor: Actor, postId: number): PublicLiker[] {
 export type LikeStats = { count: number; likedByMe: boolean };
 
 /**
+ * One statement per distinct post count. The `?` placeholders have to be
+ * spliced into the SQL text — better-sqlite3 has no array binding — so this
+ * can't be prepared once at module load; caching by count means a feed of a
+ * given size is only ever parsed once instead of on every load. The map is
+ * bounded by the feed limit, so at most ~100 entries.
+ */
+const likeStatsStatements = new Map<number, ReturnType<typeof db.prepare>>();
+
+function likeStatsStatement(postCount: number) {
+  const cached = likeStatsStatements.get(postCount);
+  if (cached) return cached;
+
+  const placeholders = new Array(postCount).fill("?").join(", ");
+  const statement = db.prepare(
+    `SELECT post_id, COUNT(*) AS count,
+            SUM(CASE WHEN user_id = ? THEN 1 ELSE 0 END) AS liked_by_me
+       FROM likes
+      WHERE post_id IN (${placeholders})
+      GROUP BY post_id`,
+  );
+  likeStatsStatements.set(postCount, statement);
+  return statement;
+}
+
+/**
  * Batched like stats for a page of posts, so rendering a feed of N posts
  * doesn't cost N round trips to the likes table.
  */
@@ -104,16 +144,11 @@ export function likeStatsFor(actor: Actor, postIds: number[]): Map<number, LikeS
   const stats = new Map<number, LikeStats>();
   if (postIds.length === 0) return stats;
 
-  const placeholders = new Array(postIds.length).fill("?").join(", ");
-  const rows = db
-    .prepare(
-      `SELECT post_id, COUNT(*) AS count,
-              SUM(CASE WHEN user_id = ? THEN 1 ELSE 0 END) AS liked_by_me
-         FROM likes
-        WHERE post_id IN (${placeholders})
-        GROUP BY post_id`,
-    )
-    .all(actor.userId, ...postIds) as { post_id: number; count: number; liked_by_me: number }[];
+  const rows = likeStatsStatement(postIds.length).all(actor.userId, ...postIds) as {
+    post_id: number;
+    count: number;
+    liked_by_me: number;
+  }[];
 
   for (const row of rows) {
     stats.set(row.post_id, { count: row.count, likedByMe: row.liked_by_me > 0 });

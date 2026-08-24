@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { db, type PostRow } from "./db.js";
 import { avatarUrlFor } from "./avatarsStore.js";
-import { friendIdsFor } from "./friendsStore.js";
+import { areFriends, friendIdsFor } from "./friendsStore.js";
 import { likeStatsFor, type LikeStats } from "./likesStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -81,12 +81,23 @@ const FEED_COLUMNS = `posts.id, posts.user_id, posts.description, posts.photo_fi
 
 /**
  * The `?` placeholders for the author list are spliced in per-call since
- * better-sqlite3 has no array binding — `selectFeedFor` builds this with one
+ * better-sqlite3 has no array binding — `listFeedFor` builds this with one
  * `?` per id in `authorIds` before preparing it.
+ *
+ * Because the SQL text varies, this can't be prepared once at module load like
+ * every other statement here; instead each distinct placeholder count is
+ * compiled once and kept, so a user with a stable friend list stops paying for
+ * a fresh parse on every feed load. The map is bounded by the number of
+ * distinct friend-list sizes in use, which is at most the number of accounts.
  */
+const feedStatements = new Map<number, ReturnType<typeof db.prepare>>();
+
 function selectFeedStatement(authorCount: number) {
+  const cached = feedStatements.get(authorCount);
+  if (cached) return cached;
+
   const placeholders = new Array(authorCount).fill("?").join(", ");
-  return db.prepare(
+  const statement = db.prepare(
     `SELECT ${FEED_COLUMNS}
        FROM posts
        JOIN users ON users.id = posts.user_id
@@ -94,6 +105,8 @@ function selectFeedStatement(authorCount: number) {
       ORDER BY posts.created_at DESC
       LIMIT ?`,
   );
+  feedStatements.set(authorCount, statement);
+  return statement;
 }
 const selectPostById = db.prepare(
   `SELECT ${FEED_COLUMNS}
@@ -140,10 +153,19 @@ export function listFeedFor(actor: Actor): PublicPost[] {
   return rows.map((row) => toPublicPost(row, actor, stats.get(row.id)));
 }
 
+/**
+ * `serverNow` ships alongside the window because `nextAllowedAt` is an absolute
+ * timestamp on *this* machine's clock. A client that compares it against its own
+ * `Date.now()` is really comparing two clocks: a device running half an hour
+ * fast counts down to zero early, enables Share, and gets a 429 for its trouble.
+ * Sending the server's own reading lets the client measure the offset once and
+ * subtract it out.
+ */
 export function quotaFor(actor: Actor) {
   assertActor(actor);
   const allowedAt = nextAllowedAt(actor.userId);
-  return { nextAllowedAt: allowedAt, canPost: Date.now() >= allowedAt };
+  const now = Date.now();
+  return { nextAllowedAt: allowedAt, canPost: now >= allowedAt, serverNow: now };
 }
 
 /**
@@ -186,13 +208,17 @@ export function nextAllowedAtFor(actor: Actor): number {
  * author is the actor or one of their friends — the same audience as the
  * feed itself. The caller answers 404 either way so a rejection never
  * confirms the file exists.
+ *
+ * This runs once per photo, so a single feed load calls it up to 100 times;
+ * `areFriends` asks about the one author that matters instead of rebuilding
+ * and sorting the actor's entire friend list on each of those calls.
  */
 export function resolvePhotoFor(actor: Actor, photoFile: string): string | null {
   assertActor(actor);
 
   const post = selectPhotoOwner.get(photoFile) as Pick<PostRow, "user_id"> | undefined;
   if (!post) return null;
-  if (post.user_id !== actor.userId && !friendIdsFor(actor).includes(post.user_id)) return null;
+  if (post.user_id !== actor.userId && !areFriends(actor, post.user_id)) return null;
 
   return path.join(uploadsDir, photoFile);
 }

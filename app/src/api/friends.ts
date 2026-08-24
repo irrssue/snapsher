@@ -7,7 +7,14 @@ export type Friend = {
 };
 
 export type FriendRequest = {
+  /** The request's own id — what accept/decline are addressed to. */
   id: number;
+  /**
+   * The requester's user id. Distinct from `id` above: they come from
+   * different tables and collide routinely, so anything that identifies the
+   * *person* (the friend list, "Remove") must use this one.
+   */
+  userId: number;
   username: string;
   avatarUrl: string | null;
 };

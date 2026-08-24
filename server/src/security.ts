@@ -94,7 +94,10 @@ export const enforceTrustedOrigin: RequestHandler = (req, res, next) => {
     });
   }
 
-  if (allowedHosts.has(origin) || origin === req.get("host")) return next();
+  // `config.publicHost` when it is set, because comparing the request's own
+  // `Origin` against its own `Host` is comparing two headers from the same
+  // sender. Falling back to `Host` keeps an unconfigured deployment working.
+  if (allowedHosts.has(origin) || origin === (config.publicHost || req.get("host"))) return next();
 
   res.status(403).json({
     error: "This request could not be verified. Please refresh and try again.",

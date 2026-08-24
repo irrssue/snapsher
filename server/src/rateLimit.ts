@@ -19,24 +19,22 @@ function sweep(store: Map<string, { resetAt: number }>) {
   timer.unref();
 }
 
-const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
-
 function clientKey(req: Request): string {
   // `req.ip` is only trustworthy because of the narrow `trust proxy` setting;
-  // see config.ts.
-  const ip = req.ip;
-
-  // If the tunnel ever stops sending `X-Forwarded-For`, `req.ip` collapses to
-  // the loopback peer and every visitor on earth would share one bucket —
-  // which would lock the whole site out rather than any one abuser. Falling
-  // back to Cloudflare's own header is safe precisely because nothing but the
-  // tunnel can reach this port.
-  if (!ip || LOOPBACK.has(ip)) {
-    const forwarded = req.get("cf-connecting-ip")?.trim();
-    if (forwarded) return forwarded;
-  }
-
-  return ip ?? req.socket.remoteAddress ?? "unknown";
+  // see config.ts. Express has already decided there how much of
+  // `X-Forwarded-For` to believe, and that decision is the whole basis for
+  // treating this value as a client identity.
+  //
+  // Nothing else may stand in for it. There used to be a fallback here to a raw
+  // `CF-Connecting-IP` header whenever `req.ip` read as loopback, on the
+  // reasoning that only the tunnel can reach this port — but a rate-limit key
+  // an unauthenticated request can choose for itself is not a rate limit at
+  // all: send a fresh value and you get a fresh bucket, and every brute-force
+  // protection in the app is bypassed. Cloudflare overwrites that header today,
+  // so this was one tunnel-config change away from being live. If the tunnel
+  // ever does stop forwarding, the correct fix is to extend `trust proxy`, not
+  // to trust a header nothing authenticates.
+  return req.ip ?? req.socket.remoteAddress ?? "unknown";
 }
 
 function tooMany(res: Response, resetAt: number, message: string) {
