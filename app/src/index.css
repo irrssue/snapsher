@@ -11,3 +11,17 @@ body,
 body {
   font-family: system-ui, "Segoe UI", Roboto, sans-serif;
 }
+
+/* iOS Safari zooms the viewport whenever a focused form control renders below
+   16px, and every field in the app is `text-sm` (14px), so tapping the email
+   box on the login screen nudged the page in. Give touch devices the 16px
+   threshold instead of blocking zoom via the viewport meta, which would also
+   take pinch-to-zoom away from anyone who needs it. Unlayered, so it wins over
+   Tailwind's utility layer. */
+@media (pointer: coarse) {
+  input:not([type="file"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
