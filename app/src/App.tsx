@@ -3,6 +3,7 @@ import { NavBar } from "./components/NavBar";
 import { PostCard } from "./components/PostCard";
 import { FriendsTab } from "./components/FriendsTab";
 import { FriendsListPopup } from "./components/FriendsListPopup";
+import { PublicProfileModal } from "./components/PublicProfileModal";
 import { Countdown } from "./components/Countdown";
 import { ComposeModal } from "./components/ComposeModal";
 import { ProfileAvatar } from "./components/ProfileAvatar";
@@ -49,6 +50,8 @@ function SignedInApp({
   const [friends, setFriends] = useState<Friend[]>([]);
   const [showFriendsPopup, setShowFriendsPopup] = useState(false);
   const [friendsPopupError, setFriendsPopupError] = useState<string | null>(null);
+  /** The user id behind an open public-profile modal — null means none is open. */
+  const [viewingUserId, setViewingUserId] = useState<number | null>(null);
 
   /**
    * Also run whenever a friendship changes — accepting a request in
@@ -174,7 +177,7 @@ function SignedInApp({
             )}
           </div>
         ) : view === "friends" ? (
-          <FriendsTab onFriendsChanged={handleFriendsChanged} />
+          <FriendsTab onFriendsChanged={handleFriendsChanged} onViewProfile={setViewingUserId} />
         ) : (
           <div className="flex w-full max-w-md flex-col items-center gap-8 pt-8 md:pt-16">
             <ProfileAvatar user={user} onAvatarChange={onAvatarChange} />
@@ -219,7 +222,12 @@ function SignedInApp({
           error={friendsPopupError}
           onClose={() => setShowFriendsPopup(false)}
           onRemoveFriend={handleRemoveFriend}
+          onViewProfile={setViewingUserId}
         />
+      )}
+
+      {viewingUserId !== null && (
+        <PublicProfileModal userId={viewingUserId} onClose={() => setViewingUserId(null)} />
       )}
     </div>
   );

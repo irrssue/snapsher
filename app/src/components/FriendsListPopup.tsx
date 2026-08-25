@@ -9,6 +9,7 @@ type FriendsListPopupProps = {
   error: string | null;
   onClose: () => void;
   onRemoveFriend: (friend: Friend) => void;
+  onViewProfile: (userId: number) => void;
 };
 
 export function FriendsListPopup({
@@ -16,6 +17,7 @@ export function FriendsListPopup({
   error,
   onClose,
   onRemoveFriend,
+  onViewProfile,
 }: FriendsListPopupProps) {
   const [query, setQuery] = useState("");
   const dialogRef = useDialogFocus<HTMLDivElement>();
@@ -94,6 +96,7 @@ export function FriendsListPopup({
               key={friend.id}
               avatarUrl={friend.avatarUrl}
               username={friend.username}
+              onClick={() => onViewProfile(friend.id)}
               action={
                 <button
                   type="button"

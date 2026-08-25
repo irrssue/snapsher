@@ -19,9 +19,11 @@ type FriendsTabProps = {
    * to update on its own.
    */
   onFriendsChanged: () => void;
+  /** Opens the public profile view for the given user id. */
+  onViewProfile: (userId: number) => void;
 };
 
-export function FriendsTab({ onFriendsChanged }: FriendsTabProps) {
+export function FriendsTab({ onFriendsChanged, onViewProfile }: FriendsTabProps) {
   const [subTab, setSubTab] = useState<SubTab>("add");
   const [requests, setRequests] = useState<FriendRequest[]>([]);
   /** The requests list couldn't be fetched at all — not that there are none. */
@@ -206,6 +208,7 @@ export function FriendsTab({ onFriendsChanged }: FriendsTabProps) {
                   key={discoverableUser.id}
                   avatarUrl={discoverableUser.avatarUrl}
                   username={discoverableUser.username}
+                  onClick={() => onViewProfile(discoverableUser.id)}
                   action={
                     <button
                       type="button"
@@ -240,6 +243,7 @@ export function FriendsTab({ onFriendsChanged }: FriendsTabProps) {
               key={request.id}
               avatarUrl={request.avatarUrl}
               username={request.username}
+              onClick={() => onViewProfile(request.userId)}
               action={
                 <div className="flex shrink-0 items-center gap-2">
                   <button
@@ -274,28 +278,38 @@ export function PersonRow({
   avatarUrl,
   username,
   action,
+  onClick,
 }: {
   avatarUrl: string | null;
   username: string;
   action: ReactNode;
+  /** Opens that person's public profile. Omitted where there's nothing to open. */
+  onClick?: () => void;
 }) {
   return (
     <div className="flex items-center gap-3 rounded-2xl px-2 py-2.5 transition-colors hover:bg-neutral-900 active:bg-neutral-900">
-      <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-700">
-        {avatarUrl ? (
-          <img
-            src={avatarUrl}
-            alt=""
-            loading="lazy"
-            decoding="async"
-            className="h-full w-full object-cover"
-          />
-        ) : (
-          <PersonIcon className="h-6 w-6 text-neutral-400" />
-        )}
-      </span>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={!onClick}
+        className="flex flex-1 items-center gap-3 text-left disabled:cursor-default"
+      >
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-700">
+          {avatarUrl ? (
+            <img
+              src={avatarUrl}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            <PersonIcon className="h-6 w-6 text-neutral-400" />
+          )}
+        </span>
 
-      <span className="flex-1 truncate text-sm text-white">@{username}</span>
+        <span className="flex-1 truncate text-sm text-white">@{username}</span>
+      </button>
 
       {action}
     </div>

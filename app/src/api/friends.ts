@@ -8,6 +8,12 @@ export type Friend = {
 
 export type SearchUser = Friend & { isFriend: boolean };
 
+/**
+ * A public profile never carries a friend count or friend status — per
+ * `about.md`, only the account owner sees their own friend count.
+ */
+export type PublicProfile = Friend & { postCount: number };
+
 export type FriendRequest = {
   /** The request's own id — what accept/decline are addressed to. */
   id: number;
@@ -52,4 +58,9 @@ export async function declineFriendRequest(requestId: number): Promise<void> {
 
 export async function removeFriend(friendUserId: number): Promise<void> {
   await api(`/api/friends/${friendUserId}`, { method: "DELETE" });
+}
+
+export async function fetchUserProfile(userId: number): Promise<PublicProfile> {
+  const { user } = await api<{ user: PublicProfile }>(`/api/users/${userId}`);
+  return user;
 }

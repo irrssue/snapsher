@@ -35,6 +35,11 @@ button itself, since anyone who can open the thread could already count the
 replies in it by scrolling — the badge just saves the scroll, it doesn't
 expose anything new.
 
+Friend counts follow the same private rule as likes. Opening someone else's
+profile — from search, a friend request, or a friends list — shows only
+their avatar, username, and post count. Their friend count is never shown to
+anyone but the account owner themself, viewing their own profile.
+
 ## Philosophy
 
 The goal is to make a social app that feels different from the current

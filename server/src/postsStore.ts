@@ -221,6 +221,16 @@ export function nextAllowedAtFor(actor: Actor): number {
 }
 
 /**
+ * Unlike `quotaFor`, not scoped to an actor: a post count is public on
+ * anyone's profile, so this backs the public profile view for a user id
+ * that isn't necessarily the caller.
+ */
+export function postCountFor(userId: number): number {
+  const { count } = selectPostCount.get(userId) as { count: number };
+  return count;
+}
+
+/**
  * Resolves an upload filename to a path on disk, but only for a signed-in
  * actor, only when the file actually backs a post, and only when that post's
  * author is the actor or one of their friends — the same audience as the

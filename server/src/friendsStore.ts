@@ -68,6 +68,8 @@ const selectRequestById = db.prepare("SELECT * FROM friend_requests WHERE id = ?
 
 const selectUserExists = db.prepare("SELECT 1 FROM users WHERE id = ?");
 
+const selectUserSummary = db.prepare("SELECT id, username, avatar_file FROM users WHERE id = ?");
+
 const selectFriendship = db.prepare(`
   SELECT 1 FROM friend_requests
    WHERE status = 'accepted'
@@ -185,6 +187,17 @@ export function searchUsers(actor: Actor, query: string): PublicSearchUser[] {
     SEARCH_LIMIT,
   ) as (UserSummaryRow & { is_friend: number })[];
   return rows.map((row) => ({ ...toPublicUser(row), isFriend: !!row.is_friend }));
+}
+
+/**
+ * Looked up by id rather than scoped to an actor: this backs the public
+ * profile view, where anyone signed in may look up anyone else. Friend
+ * status and friend count are deliberately not part of this shape — a
+ * viewer who isn't the account owner never sees them, per `about.md`.
+ */
+export function getPublicUser(userId: number): PublicFriend | null {
+  const row = selectUserSummary.get(userId) as UserSummaryRow | undefined;
+  return row ? toPublicUser(row) : null;
 }
 
 export class FriendRequestError extends Error {

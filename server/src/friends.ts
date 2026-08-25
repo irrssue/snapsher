@@ -6,6 +6,7 @@ import {
   acceptFriendRequest,
   declineFriendRequest,
   FriendRequestError,
+  getPublicUser,
   listFriends,
   listIncomingRequests,
   removeFriend,
@@ -13,6 +14,7 @@ import {
   sendFriendRequest,
   type Actor,
 } from "./friendsStore.js";
+import { postCountFor } from "./postsStore.js";
 
 function actorOf(req: express.Request): Actor {
   return { userId: req.auth!.user.id };
@@ -107,4 +109,19 @@ usersRouter.get("/search", rateLimit(config.rateLimits.userSearch), (req, res) =
   if (!q.trim()) return res.json({ users: [] });
 
   res.json({ users: searchUsers(actorOf(req), q) });
+});
+
+/**
+ * Public profile: whoever is signed in may look up anyone by id. The
+ * response deliberately omits friend count and friend status — per
+ * `about.md`, only the account owner ever sees their own friend count.
+ */
+usersRouter.get("/:id", (req, res) => {
+  const targetId = parseId(req.params.id);
+  if (targetId === null) return res.status(404).json({ error: "Not found." });
+
+  const user = getPublicUser(targetId);
+  if (!user) return res.status(404).json({ error: "Not found." });
+
+  res.json({ user: { ...user, postCount: postCountFor(targetId) } });
 });
