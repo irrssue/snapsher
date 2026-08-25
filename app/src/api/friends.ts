@@ -6,6 +6,8 @@ export type Friend = {
   avatarUrl: string | null;
 };
 
+export type SearchUser = Friend & { isFriend: boolean };
+
 export type FriendRequest = {
   /** The request's own id — what accept/decline are addressed to. */
   id: number;
@@ -29,8 +31,8 @@ export async function fetchFriendRequests(): Promise<FriendRequest[]> {
   return requests;
 }
 
-export async function searchUsers(query: string): Promise<Friend[]> {
-  const { users } = await api<{ users: Friend[] }>(
+export async function searchUsers(query: string): Promise<SearchUser[]> {
+  const { users } = await api<{ users: SearchUser[] }>(
     `/api/users/search?q=${encodeURIComponent(query)}`,
   );
   return users;

@@ -14,6 +14,8 @@ export type PublicFriend = {
   avatarUrl: string | null;
 };
 
+export type PublicSearchUser = PublicFriend & { isFriend: boolean };
+
 export type PublicFriendRequest = {
   /** The `friend_requests` row id — what accept/decline act on. */
   id: number;
@@ -104,14 +106,20 @@ const deleteCommentsByOn = db.prepare(`
 `);
 
 const searchUsersStmt = db.prepare(`
-  SELECT id, username, avatar_file
+  SELECT id, username, avatar_file,
+         EXISTS (
+           SELECT 1 FROM friend_requests
+            WHERE status = 'accepted'
+              AND ((requester_id = ? AND addressee_id = users.id)
+                OR (requester_id = users.id AND addressee_id = ?))
+         ) AS is_friend
     FROM users
    WHERE id != ?
      AND username LIKE ? ESCAPE '\\'
      AND id NOT IN (
        SELECT CASE WHEN requester_id = ? THEN addressee_id ELSE requester_id END
          FROM friend_requests
-        WHERE requester_id = ? OR addressee_id = ?
+        WHERE (requester_id = ? OR addressee_id = ?) AND status = 'pending'
      )
    ORDER BY username COLLATE NOCASE
    LIMIT ?
@@ -157,20 +165,26 @@ export function listIncomingRequests(actor: Actor): PublicFriendRequest[] {
   }));
 }
 
-/** Users neither friended nor mid-request with the actor, matching a query. */
-export function searchUsers(actor: Actor, query: string): PublicFriend[] {
+/**
+ * Users not mid-request with the actor, matching a query — friends are
+ * included (flagged via `isFriend`) so an existing friend stays findable
+ * instead of silently vanishing from search once the request is accepted.
+ */
+export function searchUsers(actor: Actor, query: string): PublicSearchUser[] {
   assertActor(actor);
   const escaped = query.trim().replace(/[\\%_]/g, (ch) => `\\${ch}`);
   const pattern = `%${escaped}%`;
   const rows = searchUsersStmt.all(
+    actor.userId,
+    actor.userId,
     actor.userId,
     pattern,
     actor.userId,
     actor.userId,
     actor.userId,
     SEARCH_LIMIT,
-  ) as UserSummaryRow[];
-  return rows.map(toPublicUser);
+  ) as (UserSummaryRow & { is_friend: number })[];
+  return rows.map((row) => ({ ...toPublicUser(row), isFriend: !!row.is_friend }));
 }
 
 export class FriendRequestError extends Error {

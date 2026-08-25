@@ -6,8 +6,8 @@ import {
   fetchFriendRequests,
   searchUsers,
   sendFriendRequest,
-  type Friend,
   type FriendRequest,
+  type SearchUser,
 } from "../api/friends";
 
 type SubTab = "add" | "requests";
@@ -29,7 +29,7 @@ export function FriendsTab({ onFriendsChanged }: FriendsTabProps) {
   /** One action failed; the lists themselves are still good. */
   const [actionError, setActionError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [discoverableUsers, setDiscoverableUsers] = useState<Friend[]>([]);
+  const [discoverableUsers, setDiscoverableUsers] = useState<SearchUser[]>([]);
   const [searching, setSearching] = useState(false);
   const [sentRequests, setSentRequests] = useState<number[]>([]);
 
@@ -199,6 +199,8 @@ export function FriendsTab({ onFriendsChanged }: FriendsTabProps) {
           <div className="flex flex-col gap-1">
             {discoverableUsers.map((discoverableUser) => {
               const alreadySent = sentRequests.includes(discoverableUser.id);
+              const isFriend = discoverableUser.isFriend;
+              const disabled = alreadySent || isFriend;
               return (
                 <PersonRow
                   key={discoverableUser.id}
@@ -207,15 +209,15 @@ export function FriendsTab({ onFriendsChanged }: FriendsTabProps) {
                   action={
                     <button
                       type="button"
-                      disabled={alreadySent}
+                      disabled={disabled}
                       onClick={() => handleSendFriendRequest(discoverableUser.id)}
                       className={`shrink-0 rounded-full px-4 py-2.5 text-xs transition-colors ${
-                        alreadySent
+                        disabled
                           ? "bg-neutral-900 text-neutral-500"
                           : "bg-white text-black hover:opacity-90 active:opacity-70"
                       }`}
                     >
-                      {alreadySent ? "Requested" : "Add"}
+                      {isFriend ? "Friends" : alreadySent ? "Requested" : "Add"}
                     </button>
                   }
                 />
