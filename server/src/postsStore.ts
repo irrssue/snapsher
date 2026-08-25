@@ -117,6 +117,7 @@ const selectPostById = db.prepare(
 const selectLastPostAt = db.prepare(
   "SELECT created_at FROM posts WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
 );
+const selectPostCount = db.prepare("SELECT COUNT(*) AS count FROM posts WHERE user_id = ?");
 const selectPhotoOwner = db.prepare(
   "SELECT user_id FROM posts WHERE photo_file = ?",
 );
@@ -165,7 +166,11 @@ export function quotaFor(actor: Actor) {
   assertActor(actor);
   const allowedAt = nextAllowedAt(actor.userId);
   const now = Date.now();
-  return { nextAllowedAt: allowedAt, canPost: now >= allowedAt, serverNow: now };
+  // `postCount` rides along here rather than a route of its own: it's the same
+  // "read your own row" policy as the rest of this function, and the profile
+  // screen that shows it already fetches the quota on load.
+  const { count } = selectPostCount.get(actor.userId) as { count: number };
+  return { nextAllowedAt: allowedAt, canPost: now >= allowedAt, serverNow: now, postCount: count };
 }
 
 /**

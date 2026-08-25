@@ -48,4 +48,5 @@ export type PostQuota = {
    * to stay right for as long as the tab is open.
    */
   serverNow: number;
+  postCount: number;
 };

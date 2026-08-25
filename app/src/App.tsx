@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { NavBar } from "./components/NavBar";
 import { PostCard } from "./components/PostCard";
 import { FriendsTab } from "./components/FriendsTab";
+import { FriendsListPopup } from "./components/FriendsListPopup";
 import { Countdown } from "./components/Countdown";
 import { ComposeModal } from "./components/ComposeModal";
 import { ProfileAvatar } from "./components/ProfileAvatar";
@@ -12,6 +13,7 @@ import {
 } from "./components/AuthPage";
 import { continueWithCredentials, fetchCurrentUser, logout, signup } from "./api/auth";
 import { createPost, fetchPosts, fetchQuota } from "./api/posts";
+import { fetchFriends, removeFriend, type Friend } from "./api/friends";
 import { ApiError, onSessionExpired } from "./api/http";
 import type { Post, User } from "./types";
 
@@ -42,13 +44,18 @@ function SignedInApp({
    * hour fast counts down to zero early, enables Share, and earns a 429.
    */
   const [clockOffset, setClockOffset] = useState(0);
+  const [postCount, setPostCount] = useState(0);
   const [composing, setComposing] = useState(false);
+  const [friends, setFriends] = useState<Friend[]>([]);
+  const [showFriendsPopup, setShowFriendsPopup] = useState(false);
+  const [friendsPopupError, setFriendsPopupError] = useState<string | null>(null);
 
   /**
-   * Also handed to `FriendsTab`, which is a sibling with its own state — so
-   * accepting or removing a friend there changes who this feed should contain
-   * while nothing remounts it. Without this the new friend's posts never
-   * appear, and a removed friend's stay on screen with their photos 404ing.
+   * Also run whenever a friendship changes — accepting a request in
+   * `FriendsTab` or removing someone in the friends popup — so this feed picks
+   * up who it should contain without either of those siblings remounting it.
+   * Without this a new friend's posts never appear, and a removed friend's
+   * stay on screen with their photos 404ing.
    */
   const refreshFeed = useCallback(async () => {
     // `allSettled`, not `all`: these two fail independently, and a 500 from the
@@ -66,6 +73,7 @@ function SignedInApp({
     if (quotaResult.status === "fulfilled") {
       setNextAllowedAt(quotaResult.value.nextAllowedAt);
       setClockOffset(quotaResult.value.serverNow - Date.now());
+      setPostCount(quotaResult.value.postCount);
     } else {
       // Null degrades the countdown to "couldn't check", which is not the same
       // as permission to post — and leaves the feed above untouched.
@@ -73,21 +81,57 @@ function SignedInApp({
     }
   }, []);
 
+  /**
+   * Backs the friend count and the "N Friends" popup on the profile screen.
+   * Kept separate from `refreshFeed` since it isn't feed state, but the two
+   * are always re-run together after anything that changes who's a friend.
+   */
+  const refreshFriends = useCallback(async () => {
+    try {
+      setFriends(await fetchFriends());
+    } catch {
+      // Not worth surfacing on its own — the count and popup just stay stale
+      // until the next successful refresh.
+    }
+  }, []);
+
+  /** Passed to `FriendsTab`: a request being accepted changes both of these. */
+  const handleFriendsChanged = useCallback(() => {
+    refreshFeed();
+    refreshFriends();
+  }, [refreshFeed, refreshFriends]);
+
   useEffect(() => {
     let active = true;
-    refreshFeed().finally(() => {
+    Promise.all([refreshFeed(), refreshFriends()]).finally(() => {
       if (active) setLoadingFeed(false);
     });
     return () => {
       active = false;
     };
-  }, [refreshFeed]);
+  }, [refreshFeed, refreshFriends]);
+
+  async function handleRemoveFriend(friend: Friend) {
+    setFriendsPopupError(null);
+    setFriends((current) => current.filter((f) => f.id !== friend.id));
+    try {
+      await removeFriend(friend.id);
+      // Their posts have to leave the feed along with them.
+      refreshFeed();
+    } catch (err) {
+      // The server still has the friendship, so put them back rather than
+      // leaving the popup asserting a removal that never happened.
+      setFriends((current) => (current.some((f) => f.id === friend.id) ? current : [...current, friend]));
+      setFriendsPopupError(err instanceof Error ? err.message : "Couldn't remove that friend.");
+    }
+  }
 
   async function handleShare(input: { photo: string; description: string }) {
     try {
       const { post, nextAllowedAt: allowedAt } = await createPost(input);
       setPosts((current) => [post, ...current]);
       setNextAllowedAt(allowedAt);
+      setPostCount((current) => current + 1);
       setComposing(false);
       setView("home");
     } catch (err) {
@@ -128,11 +172,23 @@ function SignedInApp({
             )}
           </div>
         ) : view === "friends" ? (
-          <FriendsTab onFriendsChanged={refreshFeed} />
+          <FriendsTab onFriendsChanged={handleFriendsChanged} />
         ) : (
           <div className="flex w-full max-w-md flex-col items-center gap-8 pt-8 md:pt-16">
             <ProfileAvatar user={user} onAvatarChange={onAvatarChange} />
             <span className="text-white">@{user.username}</span>
+
+            <div className="flex items-center gap-6 text-sm">
+              <button
+                type="button"
+                onClick={() => setShowFriendsPopup(true)}
+                className="text-neutral-300 transition-colors hover:text-white"
+              >
+                {friends.length} Friends
+              </button>
+              <span className="text-neutral-300">{postCount} posts</span>
+            </div>
+
             <Countdown nextAllowedAt={nextAllowedAt} clockOffset={clockOffset} />
             <button
               type="button"
@@ -152,6 +208,15 @@ function SignedInApp({
           clockOffset={clockOffset}
           onClose={() => setComposing(false)}
           onShare={handleShare}
+        />
+      )}
+
+      {showFriendsPopup && (
+        <FriendsListPopup
+          friends={friends}
+          error={friendsPopupError}
+          onClose={() => setShowFriendsPopup(false)}
+          onRemoveFriend={handleRemoveFriend}
         />
       )}
     </div>
