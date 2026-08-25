@@ -112,7 +112,7 @@ function SignedInApp({
         onAddPost={() => setComposing(true)}
       />
 
-      <main className="flex justify-center px-4 py-8 md:px-6 md:py-24">
+      <main className="flex justify-center px-4 pb-24 pt-8 md:px-6 md:py-24">
         {view === "home" ? (
           <div className="flex w-full max-w-md flex-col gap-10 md:max-w-none md:gap-16">
             {posts.map((post) => (
