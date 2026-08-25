@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import express, { Router } from "express";
+import express, { Router, type Response } from "express";
 import bcrypt from "bcryptjs";
 import { config } from "./config.js";
 import { db, isUniqueConstraintError, type UserRow } from "./db.js";
@@ -9,6 +9,15 @@ import { createLockout, rateLimit, rejectLocked } from "./rateLimit.js";
 import { asyncRoute } from "./security.js";
 import { endSession, requireAuth, startSession, toPublicUser } from "./sessions.js";
 import { avatarsDir } from "./avatarsStore.js";
+import { codeHashMatches, generateCode, hashCode, sendVerificationEmail } from "./email.js";
+import {
+  deletePendingSignup,
+  findPendingSignup,
+  pendingSignupTokenMatches,
+  recordResend,
+  recordVerifyAttempt,
+  upsertPendingSignup,
+} from "./verificationStore.js";
 import {
   EXTENSION_BY_FORMAT,
   PHOTO_DATA_URL_RE,
@@ -18,6 +27,7 @@ import {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
+const CODE_RE = /^\d{4}$/;
 const MAX_EMAIL_LENGTH = 254;
 const MIN_PASSWORD_LENGTH = 8;
 /** bcrypt only reads the first 72 bytes; the cap keeps the rest from being a silent lie. */
@@ -37,6 +47,22 @@ const INVALID_CREDENTIALS = {
 
 const lockoutByIp = createLockout(config.lockout.perIp);
 const lockoutByAccount = createLockout(config.lockout.perAccount);
+const lockoutByVerifyIp = createLockout(config.lockout.verifyCode);
+
+/**
+ * Every failure mode of `/verify-email` and `/resend-code` that isn't a wrong
+ * code collapses to this one response. A wrong code is answered on its own
+ * (401, with an attempts-left count), but "no such pending sign-up", "it
+ * expired", and "attempts/resends are used up" all look identical on purpose
+ * — none of them may tell a caller whether a pending sign-up for some address
+ * exists at all.
+ */
+function pendingSignupGone(res: Response) {
+  return res.status(410).json({
+    error: "That code has expired. Start again to get a new one.",
+    code: "signup_expired",
+  });
+}
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
@@ -226,23 +252,216 @@ authRouter.post(
       return res.status(409).json({ error: "Username or email is already taken." });
     }
 
+    // Re-running /signup for an address with a live pending row is the "I lost
+    // the email" recovery path, and is deliberately allowed to hand back a
+    // fresh code — but without this check it's also a way to re-send as fast
+    // as the signUp rate limit allows, ignoring the resend cooldown entirely.
+    // Same cooldown window as /resend-code, checked the same way.
+    const now = Date.now();
+    const existingPending = findPendingSignup(normalizedEmail);
+    if (existingPending && existingPending.expires_at > now) {
+      const cooldownEndsAt = existingPending.last_sent_at + config.verification.resendCooldownMs;
+      if (cooldownEndsAt > now) {
+        const retryAfter = Math.max(1, Math.ceil((cooldownEndsAt - now) / 1000));
+        res.setHeader("Retry-After", String(retryAfter));
+        return res.status(429).json({
+          error: "Wait a moment before asking for another code.",
+          code: "resend_cooldown",
+          retryAfter,
+        });
+      }
+    }
+
     const passwordHash = await bcrypt.hash(checked.value, config.bcryptCost);
+    const code = generateCode();
+
+    // Sent before anything is written: an email cannot be un-sent, so the
+    // write has to be the last thing that can fail. A failed send this way
+    // leaves no orphan row, starts no cooldown, and the caller is never told a
+    // code is on its way when it isn't.
+    const sent = await sendVerificationEmail(normalizedEmail, code);
+    if (!sent.ok) {
+      return res.status(502).json({
+        error: "We couldn't send a code to that address right now. Please try again in a moment.",
+        code: "email_send_failed",
+      });
+    }
+
+    // Upserting rather than requiring a fresh address is deliberate: running
+    // /signup again for the same pending address is the "I lost the email"
+    // recovery path, and replacing the row here — rather than rejecting a
+    // second attempt — is what gives that path a fresh code and a clean
+    // attempt/resend count for free. It also rotates the token below, which is
+    // exactly what stops that same replace-the-row behaviour from being used
+    // to hijack someone *else's* pending sign-up — see the comment on
+    // `pending_signups` in db.ts.
+    const token = upsertPendingSignup({
+      email: normalizedEmail,
+      username: trimmedUsername,
+      passwordHash,
+      codeHash: hashCode(normalizedEmail, code),
+      now,
+    });
+
+    res.status(202).json({
+      pending: true,
+      token,
+      resendInMs: config.verification.resendCooldownMs,
+      expiresInMs: config.verification.codeTtlMs,
+    });
+  }),
+);
+
+/**
+ * The step that actually creates the account. Everything up through the
+ * uniqueness check mirrors what `/signup` used to do inline, re-run here
+ * because time has passed since the pending row was parked and either the
+ * username or the email could have been claimed by someone else in the
+ * meantime.
+ */
+authRouter.post(
+  "/verify-email",
+  rateLimit(config.rateLimits.verifyEmail),
+  smallJsonBody,
+  asyncRoute(async (req, res) => {
+    const { email, code, token } = req.body ?? {};
+
+    if (typeof email !== "string" || email.length > MAX_EMAIL_LENGTH || !EMAIL_RE.test(email.trim())) {
+      return res.status(400).json({ error: "Enter a valid email address." });
+    }
+    if (typeof code !== "string" || !CODE_RE.test(code)) {
+      return res.status(400).json({ error: "Enter the 4-digit code." });
+    }
+
+    const normalizedEmail = normalizeEmail(email);
+
+    // Scoped to the requesting IP, not the address: the per-row attempt cap
+    // just below already kills one pending sign-up after five wrong codes, so
+    // the only thing left for this to catch is restarting sign-up to buy a
+    // fresh batch of guesses — a loop that walks across addresses.
+    const lockedFor = lockoutByVerifyIp.retryAfterMs(req.ip ?? "unknown");
+    if (lockedFor > 0) return rejectLocked(res, lockedFor);
+
+    const pending = findPendingSignup(normalizedEmail);
+    if (!pending || pending.expires_at <= Date.now()) return pendingSignupGone(res);
+
+    // Proves this caller — not just anyone who knows the address — is the one
+    // who most recently called /signup for it. Without this, a second,
+    // unrelated /signup for the same address (which upserts the row) could be
+    // completed by whoever made *that* call, not the original requester. See
+    // the comment on `pending_signups` in db.ts.
+    if (typeof token !== "string" || !pendingSignupTokenMatches(pending, token)) {
+      return pendingSignupGone(res);
+    }
+
+    const submittedHash = hashCode(normalizedEmail, code);
+    if (!codeHashMatches(pending.code_hash, submittedHash)) {
+      lockoutByVerifyIp.recordFailure(req.ip ?? "unknown");
+      const attempts = recordVerifyAttempt(normalizedEmail);
+      if (attempts >= config.verification.maxAttempts) {
+        // Deleted, not merely locked: the row is self-healing this way — the
+        // user restarts sign-up and gets a fresh code, rather than the row
+        // sitting there unusable until it expires on its own.
+        deletePendingSignup(normalizedEmail);
+        return pendingSignupGone(res);
+      }
+      return res.status(401).json({
+        error: "That code isn't right.",
+        code: "invalid_code",
+        attemptsLeft: config.verification.maxAttempts - attempts,
+      });
+    }
+
+    // Not cleared on success: this lock is keyed on IP alone (see config.ts),
+    // and clearing it here would let anyone wipe their own accumulated
+    // failures against *other* addresses just by finishing one unrelated
+    // sign-up — the exact hole `/continue`'s lockout avoids by keying on
+    // `email|ip` instead. Letting the 15-minute window age it out is enough.
+
+    const stillFree = db
+      .prepare("SELECT id FROM users WHERE email = ? COLLATE NOCASE OR username = ? COLLATE NOCASE")
+      .get(pending.email, pending.username);
+    if (stillFree) {
+      deletePendingSignup(normalizedEmail);
+      return res.status(409).json({ error: "Username or email is already taken.", code: "identity_taken" });
+    }
 
     let user: UserRow;
     try {
       const result = db
-        .prepare("INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)")
-        .run(trimmedUsername, normalizedEmail, passwordHash);
+        .prepare(
+          "INSERT INTO users (username, email, password_hash, email_verified_at) VALUES (?, ?, ?, ?)",
+        )
+        .run(pending.username, pending.email, pending.password_hash, Date.now());
       user = db.prepare("SELECT * FROM users WHERE id = ?").get(result.lastInsertRowid) as UserRow;
     } catch (err) {
-      // Only a uniqueness collision means "taken" — anything else is our
-      // problem, and reporting it as a duplicate would bury a real fault.
       if (!isUniqueConstraintError(err)) throw err;
-      return res.status(409).json({ error: "Username or email is already taken." });
+      deletePendingSignup(normalizedEmail);
+      return res.status(409).json({ error: "Username or email is already taken.", code: "identity_taken" });
     }
 
+    deletePendingSignup(normalizedEmail);
     startSession(req, res, user.id);
     res.status(201).json({ user: toPublicUser(user) });
+  }),
+);
+
+authRouter.post(
+  "/resend-code",
+  rateLimit(config.rateLimits.resendCode),
+  smallJsonBody,
+  asyncRoute(async (req, res) => {
+    const { email, token } = req.body ?? {};
+
+    if (typeof email !== "string" || email.length > MAX_EMAIL_LENGTH || !EMAIL_RE.test(email.trim())) {
+      return res.status(400).json({ error: "Enter a valid email address." });
+    }
+
+    const normalizedEmail = normalizeEmail(email);
+    const pending = findPendingSignup(normalizedEmail);
+    if (!pending || pending.expires_at <= Date.now()) return pendingSignupGone(res);
+
+    // Same possession check as /verify-email — see the comment there and on
+    // `pending_signups` in db.ts.
+    if (typeof token !== "string" || !pendingSignupTokenMatches(pending, token)) {
+      return pendingSignupGone(res);
+    }
+
+    const now = Date.now();
+    const cooldownEndsAt = pending.last_sent_at + config.verification.resendCooldownMs;
+    if (cooldownEndsAt > now) {
+      const retryAfter = Math.max(1, Math.ceil((cooldownEndsAt - now) / 1000));
+      res.setHeader("Retry-After", String(retryAfter));
+      return res.status(429).json({
+        error: "Wait a moment before asking for another code.",
+        code: "resend_cooldown",
+        retryAfter,
+      });
+    }
+
+    // Four emails total per pending sign-up (the original send plus three of
+    // these). Rather than a distinct "you're out of resends" response, this
+    // folds into the same self-healing shape as attempts running out: the row
+    // is gone, and starting sign-up over gets a clean slate.
+    if (pending.resends >= config.verification.maxResends) {
+      deletePendingSignup(normalizedEmail);
+      return pendingSignupGone(res);
+    }
+
+    const code = generateCode();
+    const sent = await sendVerificationEmail(normalizedEmail, code);
+    if (!sent.ok) {
+      return res.status(502).json({
+        error: "We couldn't send a code to that address right now. Please try again in a moment.",
+        code: "email_send_failed",
+      });
+    }
+
+    recordResend({ email: normalizedEmail, codeHash: hashCode(normalizedEmail, code), now });
+    res.status(202).json({
+      resendInMs: config.verification.resendCooldownMs,
+      expiresInMs: config.verification.codeTtlMs,
+    });
   }),
 );
 

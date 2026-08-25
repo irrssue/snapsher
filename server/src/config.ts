@@ -127,6 +127,9 @@ export const config = {
      * so this only ever binds on something that isn't the client.
      */
     userSearch: { windowMs: 15 * MINUTE, max: 120 },
+    verifyEmail: { windowMs: 15 * MINUTE, max: 20 },
+    /** Four emails per pending sign-up (the initial send plus three resends), so 10/hour per IP is already generous headroom above what a real signup needs. */
+    resendCode: { windowMs: HOUR, max: 10 },
   },
 
   /**
@@ -154,12 +157,70 @@ export const config = {
   lockout: {
     perIp: { maxFailures: 5, windowMs: 15 * MINUTE, lockMs: 15 * MINUTE },
     perAccount: { maxFailures: 50, windowMs: HOUR, lockMs: HOUR },
+    /**
+     * Keyed on the source address alone, unlike the two locks above. It has to
+     * be: a pending sign-up already destroys itself after `verification.maxAttempts`
+     * wrong codes (see verificationStore.ts), so the only thing left to catch
+     * here is restarting sign-up to buy a fresh batch of guesses — and that
+     * loop walks across addresses, not within one.
+     *
+     * Deliberately lower than `rateLimits.verifyEmail`'s 20/15min: that limiter
+     * counts every request, this counts only failures, so failures alone can
+     * never reach 20 without the limiter already having cut the caller off
+     * first — a lock that can't outrun the limiter guarding it isn't a second
+     * layer. Arming at 8 makes it the one that actually bites.
+     */
+    verifyCode: { maxFailures: 8, windowMs: 15 * MINUTE, lockMs: 30 * MINUTE },
+  },
+
+  /**
+   * Outbound email — only the sign-up code uses it today. Delivery is a plain
+   * `fetch` to Resend's REST API rather than their SDK: the homeserver deploy
+   * is `git pull` + `npm run build` + `pm2 restart` and never runs
+   * `npm install`, so a new package.json dependency builds fine on the laptop
+   * and crashes the process on boot over there.
+   */
+  email: {
+    resendApiKey: process.env.RESEND_API_KEY?.trim() || "",
+    /**
+     * Must sit on a domain verified in Resend; anything else the API refuses
+     * outright. The fallback is Resend's shared sandbox sender, which only
+     * delivers to the Resend account's own address — enough to smoke-test the
+     * wiring, useless for real users, which is the right way round for a value
+     * someone forgot to set.
+     */
+    from: process.env.EMAIL_FROM?.trim() || "Snapsher <onboarding@resend.dev>",
+    sendTimeoutMs: envInt("EMAIL_SEND_TIMEOUT_MS", 10_000),
+  },
+
+  verification: {
+    /** Long enough to switch to a mail app and back; short enough that a code lifted from a backup is stale before it's worth anything. */
+    codeTtlMs: envInt("VERIFICATION_CODE_TTL_MS", 10 * MINUTE),
+    /** The number that actually bounds guessing a 4-digit code — see the arithmetic in verificationStore.ts. Exhausting it destroys the pending sign-up rather than locking it, so the only person it can inconvenience just re-runs one form. */
+    maxAttempts: envInt("VERIFICATION_MAX_ATTEMPTS", 5),
+    /** Four emails per pending sign-up, total. */
+    maxResends: envInt("VERIFICATION_MAX_RESENDS", 3),
+    resendCooldownMs: envInt("VERIFICATION_RESEND_COOLDOWN_MS", 60 * 1000),
   },
 } as const;
 
 if (isProd && !config.cookieSecure) {
   console.warn(
     "[config] COOKIE_SECURE is off in production — session cookies will be sent over plain HTTP.",
+  );
+}
+
+/**
+ * Without a key, `sendVerificationEmail` (email.ts) fails every send in
+ * production rather than pretending to succeed — the right failure mode, but
+ * a silent one: `pm2 restart` preserves the old env and can't add a new key
+ * (see the homeserver notes), so this is exactly the variable most likely to
+ * still be missing after a deploy, and the first anyone would otherwise hear
+ * of it is a stream of 502s from `/signup`.
+ */
+if (isProd && !config.email.resendApiKey) {
+  console.warn(
+    "[config] RESEND_API_KEY is unset in production — sign-up verification emails cannot be sent.",
   );
 }
 

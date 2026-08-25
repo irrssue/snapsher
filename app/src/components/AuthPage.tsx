@@ -1,4 +1,6 @@
-export type AuthStep = "credentials" | "username";
+import { useEffect, useState } from "react";
+
+export type AuthStep = "credentials" | "username" | "code";
 
 export type AuthCredentialsData = {
   email: string;
@@ -10,9 +12,19 @@ type AuthPageProps = {
   email?: string;
   onSubmitCredentials: (data: AuthCredentialsData) => void;
   onSubmitUsername: (username: string) => void;
+  onSubmitCode: (code: string) => void;
+  onResendCode: () => void;
   onBack: () => void;
   error?: string | null;
   submitting?: boolean;
+  /**
+   * Absolute timestamp — not a duration — for when the resend button
+   * re-enables. An absolute value survives re-renders without a duration
+   * silently resetting the countdown on every keystroke in the code field.
+   */
+  resendAt?: number | null;
+  /** True only while a resend request is in flight — independent of `submitting`, which belongs to the form's own submit button. */
+  resendSubmitting?: boolean;
 };
 
 function AuthInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
@@ -24,15 +36,41 @@ function AuthInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
   );
 }
 
+/** Ticks down to `0` once `resendAt` passes, re-arming the resend button. */
+function useCountdownSeconds(resendAt: number | null | undefined): number {
+  const [secondsLeft, setSecondsLeft] = useState(() =>
+    resendAt ? Math.max(0, Math.ceil((resendAt - Date.now()) / 1000)) : 0,
+  );
+
+  useEffect(() => {
+    if (!resendAt) {
+      setSecondsLeft(0);
+      return;
+    }
+    const tick = () => setSecondsLeft(Math.max(0, Math.ceil((resendAt - Date.now()) / 1000)));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [resendAt]);
+
+  return secondsLeft;
+}
+
 export function AuthPage({
   step,
   email,
   onSubmitCredentials,
   onSubmitUsername,
+  onSubmitCode,
+  onResendCode,
   onBack,
   error,
   submitting,
+  resendAt,
+  resendSubmitting,
 }: AuthPageProps) {
+  const resendSecondsLeft = useCountdownSeconds(resendAt);
+
   return (
     <div className="flex min-h-dvh items-center justify-center bg-[#0c1014] px-6">
       {step === "credentials" ? (
@@ -82,7 +120,7 @@ export function AuthPage({
             {submitting ? "Please wait…" : "Continue"}
           </button>
         </form>
-      ) : (
+      ) : step === "username" ? (
         <form
           key="username"
           onSubmit={(e) => {
@@ -129,6 +167,63 @@ export function AuthPage({
             className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
           >
             ← Use a different email
+          </button>
+        </form>
+      ) : (
+        <form
+          key="code"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const formData = new FormData(e.currentTarget);
+            onSubmitCode(String(formData.get("code") ?? ""));
+          }}
+          className="flex w-full max-w-xs flex-col items-center gap-3"
+        >
+          <p className="break-words text-center text-xs text-neutral-400">
+            Enter the 4-digit code we sent to <span className="text-white">{email}</span>.
+          </p>
+          <AuthInput
+            type="text"
+            name="code"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            placeholder="4-digit code"
+            aria-label="Verification code"
+            // What makes iOS/Android offer the code straight from the
+            // notification banner — four separate boxes would defeat this.
+            autoComplete="one-time-code"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            enterKeyHint="go"
+            required
+            minLength={4}
+            maxLength={4}
+          />
+
+          {error && <p className="text-center text-xs text-red-400">{error}</p>}
+
+          <button
+            type="submit"
+            disabled={submitting}
+            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-50"
+          >
+            {submitting ? "Please wait…" : "Verify"}
+          </button>
+          <button
+            type="button"
+            onClick={onResendCode}
+            disabled={resendSecondsLeft > 0 || resendSubmitting}
+            className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white disabled:opacity-50"
+          >
+            {resendSecondsLeft > 0 ? `Resend code in ${resendSecondsLeft}s` : "Resend code"}
+          </button>
+          <button
+            type="button"
+            onClick={onBack}
+            className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
+          >
+            ← Start over
           </button>
         </form>
       )}

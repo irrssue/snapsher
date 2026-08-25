@@ -10,6 +10,7 @@ import { avatarsRouter } from "./avatars.js";
 import { rateLimit } from "./rateLimit.js";
 import { attachSession, requireCsrfToken, startSessionSweeper } from "./sessions.js";
 import { enforceTrustedOrigin, errorHandler, notFound, securityHeaders } from "./security.js";
+import { startPendingSignupSweeper } from "./verificationStore.js";
 
 const app = express();
 
@@ -89,6 +90,7 @@ if (config.isProd) {
 app.use(errorHandler);
 
 startSessionSweeper();
+startPendingSignupSweeper();
 
 function announce() {
   console.log(

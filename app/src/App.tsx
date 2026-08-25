@@ -13,7 +13,14 @@ import {
   type AuthCredentialsData,
   type AuthStep,
 } from "./components/AuthPage";
-import { continueWithCredentials, fetchCurrentUser, logout, signup } from "./api/auth";
+import {
+  continueWithCredentials,
+  fetchCurrentUser,
+  logout,
+  resendCode,
+  signup,
+  verifyEmail,
+} from "./api/auth";
 import { createPost, fetchPosts, fetchQuota } from "./api/posts";
 import { fetchFriends, fetchUserPosts, removeFriend, type Friend } from "./api/friends";
 import { ApiError, onSessionExpired } from "./api/http";
@@ -252,14 +259,26 @@ function SignedInApp({
   );
 }
 
+/**
+ * Widens once the username step succeeds, so the code step and a resend both
+ * know who they're verifying without asking again. `token` is the pending
+ * sign-up's possession proof from the server — required on every later
+ * request for it, but never shown to the user and not the 4-digit code.
+ */
+type PendingSignup = AuthCredentialsData & { username?: string; token?: string };
+
 function App() {
   const [user, setUser] = useState<User | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
   const [authStep, setAuthStep] = useState<AuthStep>("credentials");
   const [pendingCredentials, setPendingCredentials] =
-    useState<AuthCredentialsData | null>(null);
+    useState<PendingSignup | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authSubmitting, setAuthSubmitting] = useState(false);
+  /** Absolute timestamp for when the resend button re-enables; null while no code has been sent yet. */
+  const [resendAt, setResendAt] = useState<number | null>(null);
+  /** Separate from `authSubmitting`, which belongs to the form's own submit button — a resend is a second, independent action on the same screen. */
+  const [resendSubmitting, setResendSubmitting] = useState(false);
 
   useEffect(() => {
     fetchCurrentUser()
@@ -278,6 +297,7 @@ function App() {
       setUser(null);
       setAuthStep("credentials");
       setPendingCredentials(null);
+      setResendAt(null);
       setAuthError("Your session has ended. Please sign in again.");
     });
     return () => unsubscribe();
@@ -306,8 +326,10 @@ function App() {
     setAuthError(null);
     setAuthSubmitting(true);
     try {
-      const newUser = await signup({ ...pendingCredentials, username });
-      setUser(newUser);
+      const result = await signup({ ...pendingCredentials, username });
+      setPendingCredentials({ ...pendingCredentials, username, token: result.token });
+      setResendAt(Date.now() + result.resendInMs);
+      setAuthStep("code");
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
@@ -315,9 +337,66 @@ function App() {
     }
   }
 
+  async function handleCodeSubmit(code: string) {
+    if (!pendingCredentials?.token) return;
+    setAuthError(null);
+    setAuthSubmitting(true);
+    try {
+      const newUser = await verifyEmail({
+        email: pendingCredentials.email,
+        code,
+        token: pendingCredentials.token,
+      });
+      setUser(newUser);
+    } catch (err) {
+      // Two failures route the user back to an earlier step instead of just
+      // being shown inline: a code that outlived its pending sign-up can't be
+      // fixed by retyping it, and a username someone else claimed in the
+      // meantime needs a different one, not another guess at the same code.
+      if (err instanceof ApiError && err.code === "signup_expired") {
+        setAuthStep("credentials");
+      } else if (err instanceof ApiError && err.code === "identity_taken") {
+        setAuthStep("username");
+      }
+      setAuthError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
+
+  async function handleResendCode() {
+    if (!pendingCredentials?.token || resendSubmitting) return;
+    setAuthError(null);
+    setResendSubmitting(true);
+    try {
+      const result = await resendCode({
+        email: pendingCredentials.email,
+        token: pendingCredentials.token,
+      });
+      setResendAt(Date.now() + result.resendInMs);
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "signup_expired") {
+        setAuthStep("credentials");
+      } else if (
+        err instanceof ApiError &&
+        (err.code === "resend_cooldown" || err.code === "rate_limited") &&
+        typeof err.details?.retryAfter === "number"
+      ) {
+        // The button's own countdown already prevents this in the ordinary
+        // case; this only matters when the server's clock and cooldown ran
+        // ahead of what the button believed — e.g. a resend from another tab.
+        setResendAt(Date.now() + err.details.retryAfter * 1000);
+      }
+      setAuthError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setResendSubmitting(false);
+    }
+  }
+
   function handleAuthBack() {
     setAuthStep("credentials");
     setAuthError(null);
+    setResendAt(null);
     // `pendingCredentials` is kept on purpose: it is what fills the email field
     // back in. Clearing it made "use a different email" wipe the address the
     // user had just typed correctly, so changing one character of it meant
@@ -329,6 +408,7 @@ function App() {
     setUser(null);
     setAuthStep("credentials");
     setPendingCredentials(null);
+    setResendAt(null);
     setAuthError(null);
   }
 
@@ -343,9 +423,13 @@ function App() {
         email={pendingCredentials?.email}
         onSubmitCredentials={handleCredentialsSubmit}
         onSubmitUsername={handleUsernameSubmit}
+        onSubmitCode={handleCodeSubmit}
+        onResendCode={handleResendCode}
         onBack={handleAuthBack}
         error={authError}
         submitting={authSubmitting}
+        resendAt={resendAt}
+        resendSubmitting={resendSubmitting}
       />
     );
   }

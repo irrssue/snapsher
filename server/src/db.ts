@@ -32,6 +32,17 @@ if (!userColumns.some((column) => column.name === "avatar_file")) {
   db.exec("ALTER TABLE users ADD COLUMN avatar_file TEXT");
 }
 
+// Verification landed after some accounts already existed. A NULL here is the
+// literal truth about them — never proven — and nothing in the app branches on
+// it: with verification happening *before* a users row is ever written (see
+// auth.ts), "a row in users" is itself the guarantee, which is a stronger
+// invariant than a nullable column every read path would have to remember.
+// This column is only the record of *when*, kept in case a future nudge for
+// grandfathered accounts needs something to read.
+if (!userColumns.some((column) => column.name === "email_verified_at")) {
+  db.exec("ALTER TABLE users ADD COLUMN email_verified_at INTEGER");
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS posts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,6 +122,54 @@ db.exec(`
   )
 `);
 
+/**
+ * A sign-up that has been paid for but not yet proven: the username and
+ * password are settled, the address is not. Nothing here is an account —
+ * `POST /api/auth/verify-email` is what promotes one of these rows into
+ * `users`.
+ *
+ * Keyed on the (already-normalized) email rather than an autoincrement id, so
+ * re-running the sign-up step for the same address *replaces* the pending
+ * attempt instead of leaving a trail of live codes behind for one inbox. Only
+ * one code is ever valid for a given address at a time.
+ *
+ * `code_hash` is a SHA-256 of the code, on the same reasoning as
+ * `sessions.id`: a row that leaks — through a backup, a log line, a stray
+ * `SELECT *` — must not hand out a working code by itself. Honest about what
+ * that buys, though: 10,000 codes is a space anyone holding the row can walk
+ * offline in milliseconds, so the hash defends against the row being *seen*,
+ * not against it being *attacked*. What actually bounds guessing is
+ * `expires_at` and `attempts`, enforced in auth.ts.
+ *
+ * `token_hash` is a second, unrelated secret: a hash of an opaque token
+ * `/signup` hands back only to the caller who made that request. Since the
+ * row is keyed on email alone, nothing before this stopped a second,
+ * unrelated caller from re-running `/signup` for someone else's address —
+ * upserting fresh username/password/code over the real requester's row and
+ * emailing *them* a new code. Requiring the matching token on `/verify-email`
+ * and `/resend-code` means whoever's browser didn't make the most recent
+ * `/signup` call for that address can't act on the row at all, win or lose;
+ * it turns that takeover attempt into a failed one instead.
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS pending_signups (
+    email TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    code_hash TEXT NOT NULL,
+    token_hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    last_sent_at INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    resends INTEGER NOT NULL DEFAULT 0
+  )
+`);
+
+db.exec(
+  "CREATE INDEX IF NOT EXISTS idx_pending_signups_expires ON pending_signups (expires_at)",
+);
+
 db.exec(
   "CREATE INDEX IF NOT EXISTS idx_posts_user_created ON posts (user_id, created_at DESC)",
 );
@@ -186,6 +245,20 @@ export type UserRow = {
   password_hash: string;
   avatar_file: string | null;
   created_at: string;
+  email_verified_at: number | null;
+};
+
+export type PendingSignupRow = {
+  email: string;
+  username: string;
+  password_hash: string;
+  code_hash: string;
+  token_hash: string;
+  created_at: number;
+  expires_at: number;
+  last_sent_at: number;
+  attempts: number;
+  resends: number;
 };
 
 export type PostRow = {
