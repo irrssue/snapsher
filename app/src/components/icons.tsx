@@ -140,6 +140,23 @@ export function UserPlusIcon({ className }: { className?: string }) {
   );
 }
 
+export function SendIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M4 20 20.5 12 4 4l2 7.2L14 12l-8 .8L4 20Z" />
+    </svg>
+  );
+}
+
 export function CommentIcon({ className }: { className?: string }) {
   return (
     <svg

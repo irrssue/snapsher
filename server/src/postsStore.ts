@@ -6,6 +6,7 @@ import { db, type PostRow } from "./db.js";
 import { avatarUrlFor } from "./avatarsStore.js";
 import { areFriends, friendIdsFor } from "./friendsStore.js";
 import { likeStatsFor, type LikeStats } from "./likesStore.js";
+import { commentCountFor } from "./commentsStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -45,6 +46,8 @@ export type PublicPost = {
   isOwner: boolean;
   /** Only ever set when `isOwner` is true — nobody else may learn a post's like count. */
   likeCount?: number;
+  /** Public, unlike likeCount — anyone who can open the thread can already count it. */
+  commentCount: number;
 };
 
 type FeedRow = Pick<PostRow, "id" | "user_id" | "description" | "photo_file" | "created_at"> & {
@@ -58,7 +61,12 @@ export class QuotaExceededError extends Error {
   }
 }
 
-function toPublicPost(row: FeedRow, actor: Actor, stats: LikeStats | undefined): PublicPost {
+function toPublicPost(
+  row: FeedRow,
+  actor: Actor,
+  stats: LikeStats | undefined,
+  commentCount: number,
+): PublicPost {
   const isOwner = row.user_id === actor.userId;
   return {
     id: String(row.id),
@@ -74,6 +82,7 @@ function toPublicPost(row: FeedRow, actor: Actor, stats: LikeStats | undefined):
     likedByMe: stats?.likedByMe ?? false,
     isOwner,
     ...(isOwner ? { likeCount: stats?.count ?? 0 } : {}),
+    commentCount,
   };
 }
 
@@ -150,8 +159,12 @@ export function listFeedFor(actor: Actor): PublicPost[] {
     ...authorIds,
     FEED_LIMIT,
   ) as FeedRow[];
-  const stats = likeStatsFor(actor, rows.map((row) => row.id));
-  return rows.map((row) => toPublicPost(row, actor, stats.get(row.id)));
+  const postIds = rows.map((row) => row.id);
+  const stats = likeStatsFor(actor, postIds);
+  const commentCounts = commentCountFor(postIds);
+  return rows.map((row) =>
+    toPublicPost(row, actor, stats.get(row.id), commentCounts.get(row.id) ?? 0),
+  );
 }
 
 /**
@@ -195,8 +208,8 @@ export function createPostFor(
   const id = insertWithinQuota(actor.userId, input.description, input.photoFile, createdAt);
 
   return {
-    // A brand-new post has no likes yet, so there's nothing to batch-fetch.
-    post: toPublicPost(selectPostById.get(id) as FeedRow, actor, undefined),
+    // A brand-new post has no likes or comments yet, so there's nothing to batch-fetch.
+    post: toPublicPost(selectPostById.get(id) as FeedRow, actor, undefined, 0),
     nextAllowedAt: createdAt + POST_INTERVAL_MS,
   };
 }

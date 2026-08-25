@@ -17,6 +17,8 @@ export type Post = {
   isOwner: boolean;
   /** Only ever present when `isOwner` is true — nobody else can see a like count. */
   likeCount?: number;
+  /** Public, unlike likeCount — anyone opening the thread can already see who commented. */
+  commentCount: number;
 };
 
 export type Liker = {

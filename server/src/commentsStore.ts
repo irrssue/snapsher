@@ -13,10 +13,9 @@ import { areFriends } from "./friendsStore.js";
  *   - write  — same audience; the author is taken from the session, never the body
  *   - delete — the comment's own writer, or the owner of the post it sits on
  *
- * Deliberately absent: anything that counts. `about.md` excludes comment counts
- * as firmly as like counts, so there is no `countFor` here to be tempted by —
- * reading the thread is the only way its length is ever observable, exactly as
- * with `likersFor`.
+ * Unlike a like count, a comment count is public: anyone who can open the
+ * thread can already count the replies in it by scrolling, so `commentCountFor`
+ * below just saves them the scroll rather than exposing anything new.
  */
 export type Actor = { userId: number };
 
@@ -136,6 +135,48 @@ export function addComment(actor: Actor, postId: number, body: unknown): PublicC
 
   const id = insertComment.run(postId, actor.userId, trimmed, Date.now()).lastInsertRowid;
   return toPublicComment(selectOneComment.get(id) as CommentJoinRow, actor, postAuthorId);
+}
+
+/**
+ * One statement per distinct post count, on the same caching rule as
+ * `likeStatsStatement` in likesStore.ts — the `?` placeholders have to be
+ * spliced into the SQL text since better-sqlite3 has no array binding.
+ */
+const commentCountStatements = new Map<number, ReturnType<typeof db.prepare>>();
+
+function commentCountStatement(postCount: number) {
+  const cached = commentCountStatements.get(postCount);
+  if (cached) return cached;
+
+  const placeholders = new Array(postCount).fill("?").join(", ");
+  const statement = db.prepare(
+    `SELECT post_id, COUNT(*) AS count
+       FROM comments
+      WHERE post_id IN (${placeholders})
+      GROUP BY post_id`,
+  );
+  commentCountStatements.set(postCount, statement);
+  return statement;
+}
+
+/**
+ * Batched comment counts for a page of posts, so rendering a feed of N posts
+ * doesn't cost N round trips to the comments table. No actor/visibility check
+ * here — the caller (the feed) has already filtered to posts it may show.
+ */
+export function commentCountFor(postIds: number[]): Map<number, number> {
+  const counts = new Map<number, number>();
+  if (postIds.length === 0) return counts;
+
+  const rows = commentCountStatement(postIds.length).all(...postIds) as {
+    post_id: number;
+    count: number;
+  }[];
+
+  for (const row of rows) {
+    counts.set(row.post_id, row.count);
+  }
+  return counts;
 }
 
 export function deleteComment(actor: Actor, postId: number, commentId: number): void {

@@ -22,16 +22,18 @@ once every half-day, per person.
 To keep the app from turning into another over-simulating, metrics-driven
 social feed, the first stage intentionally leaves out:
 
-- No like **counts**.
-- No comment **counts**.
+- No like **counts** — only the post's own author ever sees how many likes
+  it has.
 - No share button, at all.
 
 ## What IS included, despite the above
 
-There **is** a like button and a comment button — they exist as actions,
-just without any visible counts attached to them. You can like a post or
-comment on it, but you won't see "24 likes" or "8 comments" anywhere. The
-interaction exists; the score-keeping doesn't.
+There **is** a like button and a comment button. Likes stay private: you can
+like a post, but only its author sees "24 likes" — nobody else does. Comments
+are different, and visible to everyone: a comment count sits on the comment
+button itself, since anyone who can open the thread could already count the
+replies in it by scrolling — the badge just saves the scroll, it doesn't
+expose anything new.
 
 ## Philosophy
 
