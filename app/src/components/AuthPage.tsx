@@ -19,7 +19,7 @@ function AuthInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
-      className="w-full rounded-full bg-neutral-400 px-5 py-2.5 text-sm text-white placeholder-white/90 outline-none"
+      className="w-full rounded-full bg-neutral-800 px-4 py-2.5 text-sm text-white placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-white/60"
     />
   );
 }
@@ -34,7 +34,7 @@ export function AuthPage({
   submitting,
 }: AuthPageProps) {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#0c1014] px-6">
+    <div className="flex min-h-dvh items-center justify-center bg-[#0c1014] px-6">
       {step === "credentials" ? (
         <form
           key="credentials"
@@ -46,12 +46,13 @@ export function AuthPage({
               password: String(formData.get("password") ?? ""),
             });
           }}
-          className="flex w-full max-w-56 flex-col items-center gap-3"
+          className="flex w-full max-w-xs flex-col items-center gap-3"
         >
           <AuthInput
             type="email"
             name="email"
-            placeholder="email"
+            placeholder="Email"
+            aria-label="Email"
             autoComplete="email"
             defaultValue={email}
             required
@@ -60,6 +61,7 @@ export function AuthPage({
             type="password"
             name="password"
             placeholder="Password"
+            aria-label="Password"
             autoComplete="current-password"
             required
             // Mirrors the server's minimum. Signing in to an existing account
@@ -75,7 +77,7 @@ export function AuthPage({
           <button
             type="submit"
             disabled={submitting}
-            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-50"
           >
             {submitting ? "Please wait…" : "Continue"}
           </button>
@@ -88,9 +90,9 @@ export function AuthPage({
             const formData = new FormData(e.currentTarget);
             onSubmitUsername(String(formData.get("username") ?? ""));
           }}
-          className="flex w-full max-w-56 flex-col items-center gap-3"
+          className="flex w-full max-w-xs flex-col items-center gap-3"
         >
-          <p className="text-center text-xs text-neutral-400">
+          <p className="break-words text-center text-xs text-neutral-400">
             No account found for <span className="text-white">{email}</span>. Pick a
             username to finish creating one.
           </p>
@@ -98,7 +100,15 @@ export function AuthPage({
             type="text"
             name="username"
             placeholder="username"
+            aria-label="Username"
             autoComplete="username"
+            // iOS defaults a text field to sentence case with autocorrect on, so
+            // "zaw" was being stored as "Zaw" — permanently, since nothing in
+            // the app can rename an account afterwards.
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            enterKeyHint="go"
             required
             minLength={3}
             maxLength={20}
@@ -109,14 +119,14 @@ export function AuthPage({
           <button
             type="submit"
             disabled={submitting}
-            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-50"
           >
             {submitting ? "Please wait…" : "Sign up"}
           </button>
           <button
             type="button"
             onClick={onBack}
-            className="text-xs text-neutral-400 transition-colors hover:text-white"
+            className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
           >
             ← Use a different email
           </button>

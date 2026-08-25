@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { readPhotoAsDataUrl } from "../api/posts";
+import { useBodyScrollLock, useDialogFocus } from "../hooks";
 import { formatRemaining, useNow } from "../time";
 import { CommentIcon, HeartIcon, PlusIcon } from "./icons";
 
@@ -33,6 +34,9 @@ export function ComposeModal({
   const [error, setError] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useDialogFocus<HTMLDivElement>();
+
+  useBodyScrollLock();
 
   const hasDraft = photo !== null || description.trim() !== "";
 
@@ -81,22 +85,23 @@ export function ComposeModal({
       role="presentation"
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Share a photo"
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
-        className="max-h-full w-full max-w-md overflow-y-auto rounded-3xl bg-neutral-900 p-5 md:max-w-3xl md:p-8"
+        className="max-h-full w-full max-w-md overflow-y-auto overscroll-contain rounded-3xl bg-neutral-900 p-5 outline-none md:max-w-3xl md:p-8"
       >
         <div className="flex items-start justify-between">
-          <p className="text-xs uppercase tracking-widest text-neutral-500">
+          <p className="text-xs uppercase tracking-widest text-neutral-400">
             Preview
           </p>
           <button
             type="button"
             onClick={onClose}
             disabled={sharing}
-            aria-label="Close"
-            className="text-sm text-neutral-400 transition-colors hover:text-white disabled:opacity-40"
+            className="-m-2 p-2 text-sm text-neutral-400 transition-colors hover:text-white active:text-white disabled:opacity-40"
           >
             Cancel
           </button>
@@ -115,7 +120,7 @@ export function ComposeModal({
               maxLength={MAX_DESCRIPTION_LENGTH}
               rows={3}
               placeholder="Enter a description here"
-              className="w-full resize-none rounded-2xl bg-neutral-800 px-4 py-3 text-sm text-neutral-200 placeholder-neutral-400 outline-none"
+              className="w-full resize-none rounded-2xl bg-neutral-800 px-4 py-3 text-sm text-neutral-200 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-white/60"
             />
 
             <div className="order-1 flex items-center gap-3 text-white opacity-60 md:order-none">
@@ -137,7 +142,7 @@ export function ComposeModal({
                 className="h-full w-full object-cover"
               />
             ) : (
-              <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-black transition-transform group-hover:scale-105">
+              <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-black transition-transform group-hover:scale-105 group-active:scale-95">
                 <PlusIcon className="h-5 w-5" />
               </span>
             )}
@@ -175,7 +180,7 @@ export function ComposeModal({
             type="button"
             onClick={handleShare}
             disabled={!photo || !canPost || sharing}
-            className="w-full max-w-56 rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40"
+            className="w-full max-w-56 rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-40"
           >
             {sharing ? "Sharing…" : "Share photo"}
           </button>

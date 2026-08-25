@@ -25,3 +25,43 @@ body {
     font-size: 16px;
   }
 }
+
+/* Tailwind compiles every `hover:` utility inside `@media (hover: hover)`, and
+   a phone reports `hover: none` — so none of them ever fire there. Almost every
+   button in the app kicks off a request, and with no pressed state a tap looked
+   like nothing happened and people tapped again. Unlayered so it also covers
+   the buttons that carry no utility of their own. */
+@media (pointer: coarse) {
+  button:not(:disabled):active,
+  [role="button"]:active {
+    opacity: 0.7;
+  }
+}
+
+/* iOS paints its own grey flash on tap, which now only doubles up with the rule
+   above — and on the icon buttons it covers a box far larger than the glyph. */
+button,
+[role="button"],
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* `manipulation` drops the double-tap-to-zoom wait, so a quick second tap on
+   the like button fires the button instead of zooming the page; the selection
+   rules stop a long-press raising the iOS text magnifier over a button label. */
+button,
+[role="button"] {
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Nothing in the app drew a keyboard focus state and several controls cleared
+   the browser's. Reinstated once here rather than on twenty-odd buttons.
+   `:where()` keeps specificity at zero; being unlayered is what wins against
+   Tailwind's utilities. Inputs are excluded — each pairs its own
+   `focus:outline-none` with a ring. */
+:where(button, [role="button"], a, summary):focus-visible {
+  outline: 2px solid rgb(255 255 255 / 0.6);
+  outline-offset: 2px;
+}

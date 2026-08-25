@@ -67,6 +67,8 @@ export function ProfileAvatar({ user, onAvatarChange }: ProfileAvatarProps) {
             <img
               src={user.avatarUrl}
               alt=""
+              loading="lazy"
+              decoding="async"
               className="h-full w-full object-cover"
             />
           ) : (
@@ -74,7 +76,7 @@ export function ProfileAvatar({ user, onAvatarChange }: ProfileAvatarProps) {
           )}
         </span>
 
-        <span className="absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full bg-white text-black ring-2 ring-black transition-transform group-hover:scale-105">
+        <span className="absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full bg-white text-black ring-2 ring-black transition-transform group-hover:scale-105 group-active:scale-95">
           <PencilIcon className="h-3.5 w-3.5" />
         </span>
       </button>

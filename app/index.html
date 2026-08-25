@@ -3,8 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>app</title>
+    <!-- `viewport-fit=cover` is what lets the page paint under the notch and the
+         home-indicator band; without it every `env(safe-area-inset-*)` the app
+         uses resolves to 0 and the bottom nav sits inside the indicator. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0c1014" />
+    <title>Snapsher</title>
   </head>
   <body>
     <div id="root"></div>

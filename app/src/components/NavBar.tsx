@@ -16,7 +16,9 @@ const TABS: { key: View; label: string; icon: (className: string) => ReactElemen
 
 export function NavBar({ active, onChange, onAddPost }: NavBarProps) {
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-10 flex items-center justify-center gap-3 px-4 py-4 md:static md:pt-8 md:pb-0">
+    // Notched iPhones reserve a band at the bottom for the home indicator,
+    // and it swallows taps — the pill has to clear it, not sit in it.
+    <nav className="fixed inset-x-0 bottom-0 z-10 flex items-center justify-center gap-3 px-4 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] md:static md:pt-8 md:pb-0">
       <div className="flex gap-1 rounded-full bg-neutral-800 p-1">
         {TABS.map((tab) => (
           <button
@@ -27,7 +29,7 @@ export function NavBar({ active, onChange, onAddPost }: NavBarProps) {
             className={`flex h-11 w-11 items-center justify-center rounded-full transition-colors ${
               active === tab.key
                 ? "bg-neutral-200 text-black"
-                : "text-neutral-300 hover:text-white"
+                : "text-neutral-300 hover:text-white active:text-white"
             }`}
           >
             {tab.icon("h-6 w-6")}
@@ -37,7 +39,7 @@ export function NavBar({ active, onChange, onAddPost }: NavBarProps) {
           type="button"
           aria-label="Add post"
           onClick={onAddPost}
-          className="flex h-11 w-11 items-center justify-center rounded-full text-neutral-300 transition-colors hover:text-white"
+          className="flex h-11 w-11 items-center justify-center rounded-full text-neutral-300 transition-colors hover:text-white active:text-white"
         >
           <PlusIcon className="h-6 w-6" />
         </button>
@@ -47,11 +49,11 @@ export function NavBar({ active, onChange, onAddPost }: NavBarProps) {
         type="button"
         aria-label="Profile"
         onClick={() => onChange("profile")}
-        className={`flex h-9 w-9 items-center justify-center rounded-full transition-transform hover:scale-105 ${
+        className={`flex h-11 w-11 items-center justify-center rounded-full transition-transform hover:scale-105 active:scale-95 ${
           active === "profile" ? "bg-neutral-200 text-black" : "bg-white text-black"
         }`}
       >
-        <PersonIcon className="h-4 w-4" />
+        <PersonIcon className="h-5 w-5" />
       </button>
     </nav>
   );

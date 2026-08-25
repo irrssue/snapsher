@@ -31,6 +31,8 @@ export function PostCard({ post }: { post: Post }) {
   const [likers, setLikers] = useState<Liker[] | null>(null);
   const [likersError, setLikersError] = useState<string | null>(null);
   const pendingLike = useRef(false);
+  const likersRef = useRef<HTMLDivElement>(null);
+  const likersToggleRef = useRef<HTMLButtonElement>(null);
 
   const [commentsOpen, setCommentsOpen] = useState(false);
   /** Null means "not loaded yet", which is distinct from an empty thread. */
@@ -53,6 +55,25 @@ export function PostCard({ post }: { post: Post }) {
       active = false;
     };
   }, [likersOpen, post.id]);
+
+  /**
+   * The likers popover has no backdrop to catch a tap and its close button is
+   * the only other way out, so dismiss it on any press landing elsewhere. The
+   * toggle counts as inside: closing on its press would let the click that
+   * follows immediately reopen it.
+   */
+  useEffect(() => {
+    if (!likersOpen) return;
+
+    function onPointerDown(e: PointerEvent) {
+      const target = e.target as Node;
+      if (likersRef.current?.contains(target) || likersToggleRef.current?.contains(target)) return;
+      setLikersOpen(false);
+    }
+
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [likersOpen]);
 
   useEffect(() => {
     if (!commentsOpen) return;
@@ -149,7 +170,13 @@ export function PostCard({ post }: { post: Post }) {
         <div className="flex items-center gap-2">
           <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-300">
             {post.avatarUrl ? (
-              <img src={post.avatarUrl} alt="" className="h-full w-full object-cover" />
+              <img
+                src={post.avatarUrl}
+                alt=""
+                loading="lazy"
+                decoding="async"
+                className="h-full w-full object-cover"
+              />
             ) : (
               <PersonIcon className="h-5 w-5 text-neutral-500" />
             )}
@@ -158,7 +185,7 @@ export function PostCard({ post }: { post: Post }) {
         </div>
 
         {post.description && (
-          <div className="whitespace-pre-line rounded-2xl bg-neutral-800 px-4 py-3 text-sm text-neutral-200">
+          <div className="whitespace-pre-line break-words rounded-2xl bg-neutral-800 px-4 py-3 text-sm text-neutral-200">
             {post.description}
           </div>
         )}
@@ -169,7 +196,7 @@ export function PostCard({ post }: { post: Post }) {
             aria-label={liked ? "Unlike" : "Like"}
             aria-pressed={liked}
             onClick={handleToggleLike}
-            className={`p-2 transition-opacity hover:opacity-70 md:p-0 ${
+            className={`p-2 transition-opacity hover:opacity-70 active:opacity-70 md:p-0 ${
               liked ? "text-green-500" : ""
             }`}
           >
@@ -185,7 +212,7 @@ export function PostCard({ post }: { post: Post }) {
             aria-label={commentsOpen ? "Hide comments" : "Comments"}
             aria-expanded={commentsOpen}
             onClick={() => setCommentsOpen((open) => !open)}
-            className={`p-2 transition-opacity hover:opacity-70 md:p-0 ${
+            className={`p-2 transition-opacity hover:opacity-70 active:opacity-70 md:p-0 ${
               commentsOpen ? "text-neutral-400" : ""
             }`}
           >
@@ -194,9 +221,10 @@ export function PostCard({ post }: { post: Post }) {
           {/* Only the post's own author ever gets a like count to click into. */}
           {post.isOwner && (
             <button
+              ref={likersToggleRef}
               type="button"
               onClick={() => setLikersOpen((open) => !open)}
-              className="text-xs text-neutral-400 transition-colors hover:text-white"
+              className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
             >
               {likeCount} {likeCount === 1 ? "like" : "likes"}
             </button>
@@ -206,14 +234,17 @@ export function PostCard({ post }: { post: Post }) {
           </span>
 
           {likersOpen && (
-            <div className="absolute bottom-full left-0 z-10 mb-2 w-52 rounded-2xl bg-neutral-800 p-3 shadow-lg">
+            <div
+              ref={likersRef}
+              className="absolute bottom-full left-0 z-10 mb-2 w-52 rounded-2xl bg-neutral-800 p-3 shadow-lg"
+            >
               <div className="mb-2 flex items-center justify-between">
                 <span className="text-xs font-semibold text-white">Liked by</span>
                 <button
                   type="button"
                   aria-label="Close"
                   onClick={() => setLikersOpen(false)}
-                  className="text-neutral-400 transition-colors hover:text-white"
+                  className="-m-2 p-2 text-neutral-400 transition-colors hover:text-white active:text-white"
                 >
                   <CloseIcon className="h-3 w-3" />
                 </button>
@@ -227,7 +258,7 @@ export function PostCard({ post }: { post: Post }) {
                 <p className="text-xs text-neutral-400">No likes yet.</p>
               )}
               {likers && likers.length > 0 && (
-                <ul className="flex max-h-48 flex-col gap-2 overflow-y-auto">
+                <ul className="flex max-h-48 flex-col gap-2 overflow-y-auto overscroll-contain">
                   {likers.map((liker) => (
                     <li key={liker.id} className="flex items-center gap-2">
                       <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-300">
@@ -235,6 +266,8 @@ export function PostCard({ post }: { post: Post }) {
                           <img
                             src={liker.avatarUrl}
                             alt=""
+                            loading="lazy"
+                            decoding="async"
                             className="h-full w-full object-cover"
                           />
                         ) : (
@@ -270,7 +303,7 @@ export function PostCard({ post }: { post: Post }) {
             )}
 
             {comments && comments.length > 0 && (
-              <ul className="flex max-h-56 flex-col gap-3 overflow-y-auto">
+              <ul className="flex max-h-56 flex-col gap-3 overflow-y-auto overscroll-contain">
                 {comments.map((comment) => (
                   <li key={comment.id} className="flex items-start gap-2">
                     <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-300">
@@ -278,6 +311,8 @@ export function PostCard({ post }: { post: Post }) {
                         <img
                           src={comment.avatarUrl}
                           alt=""
+                          loading="lazy"
+                          decoding="async"
                           className="h-full w-full object-cover"
                         />
                       ) : (
@@ -290,7 +325,7 @@ export function PostCard({ post }: { post: Post }) {
                         <span className="truncate text-xs font-semibold text-white">
                           @{comment.username}
                         </span>
-                        <span className="shrink-0 text-[10px] text-neutral-500">
+                        <span className="shrink-0 text-[11px] text-neutral-400">
                           {commentTimeFormatter.format(new Date(comment.createdAt))}
                         </span>
                       </div>
@@ -304,7 +339,7 @@ export function PostCard({ post }: { post: Post }) {
                         type="button"
                         aria-label={`Delete comment by @${comment.username}`}
                         onClick={() => handleDeleteComment(comment)}
-                        className="shrink-0 text-neutral-500 transition-colors hover:text-white"
+                        className="-m-2 shrink-0 p-2 text-neutral-500 transition-colors hover:text-white active:text-white"
                       >
                         <CloseIcon className="h-3 w-3" />
                       </button>
@@ -314,7 +349,14 @@ export function PostCard({ post }: { post: Post }) {
               </ul>
             )}
 
-            <form onSubmit={handleAddComment} className="flex items-center gap-2">
+            {/*
+             * `items-stretch`, because the two controls no longer size alike:
+             * the coarse-pointer rule in index.css forces the input to 16px to
+             * stop iOS zooming on focus, while the button keeps its own size.
+             * Stretching makes the shorter one match rather than guessing at
+             * paddings that happen to line up on one device.
+             */}
+            <form onSubmit={handleAddComment} className="flex items-stretch gap-2">
               <input
                 type="text"
                 value={draft}
@@ -322,12 +364,12 @@ export function PostCard({ post }: { post: Post }) {
                 maxLength={MAX_COMMENT_LENGTH}
                 placeholder="Add a comment"
                 aria-label="Add a comment"
-                className="min-w-0 flex-1 rounded-full bg-neutral-900 px-3 py-1.5 text-xs text-white placeholder:text-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-600"
+                className="min-w-0 flex-1 rounded-full bg-neutral-900 px-3 py-2 text-xs text-white placeholder:text-neutral-400 focus:outline-none focus:ring-1 focus:ring-neutral-600"
               />
               <button
                 type="submit"
                 disabled={!draft.trim() || sending}
-                className="shrink-0 rounded-full bg-white px-3 py-1.5 text-xs text-black transition-opacity hover:opacity-90 disabled:opacity-40"
+                className="shrink-0 rounded-full bg-white px-3 py-2 text-sm text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-40"
               >
                 {sending ? "…" : "Post"}
               </button>
@@ -343,6 +385,7 @@ export function PostCard({ post }: { post: Post }) {
           // Photos are now fetched through an authenticated route, so a feed of
           // 100 is 100 requests; only ask for the ones actually on screen.
           loading="lazy"
+          decoding="async"
           className="h-full w-full object-cover"
         />
       </div>

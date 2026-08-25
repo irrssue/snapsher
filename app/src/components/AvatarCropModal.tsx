@@ -1,22 +1,38 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckIcon, CloseIcon } from "./icons";
+import { useBodyScrollLock, useDialogFocus } from "../hooks";
 
-/** On-screen size of the square crop viewport. */
-const VIEWPORT = 288;
+/** Largest on-screen size of the square crop viewport. */
+const MAX_VIEWPORT = 288;
 /** Side length, in pixels, of the square avatar we actually upload. */
 const OUTPUT_SIZE = 640;
 const JPEG_QUALITY = 0.9;
 const MAX_ZOOM_MULTIPLIER = 3;
 
+/**
+ * The square has to fit between the backdrop's `px-4` and the dialog's `p-6`,
+ * which is 80px of the window's width. A fixed 288 spilled out of the rounded
+ * modal on anything narrower than ~368px — 48px of overflow on a 320px phone —
+ * and, with nothing clipping the document, scrolled the whole page sideways.
+ */
+function measureViewport() {
+  return Math.max(160, Math.min(MAX_VIEWPORT, window.innerWidth - 32 - 48));
+}
+
 type Frame = { left: number; top: number; scale: number };
 
-function clampFrame(frame: Frame, naturalWidth: number, naturalHeight: number): Frame {
+function clampFrame(
+  frame: Frame,
+  naturalWidth: number,
+  naturalHeight: number,
+  viewport: number,
+): Frame {
   const displayWidth = naturalWidth * frame.scale;
   const displayHeight = naturalHeight * frame.scale;
   // The image must always fully cover the viewport: its edges can retreat
   // past the viewport's edges but never leave a gap inside it.
-  const minLeft = VIEWPORT - displayWidth;
-  const minTop = VIEWPORT - displayHeight;
+  const minLeft = viewport - displayWidth;
+  const minTop = viewport - displayHeight;
   return {
     ...frame,
     left: Math.min(0, Math.max(minLeft, frame.left)),
@@ -40,6 +56,8 @@ type AvatarCropModalProps = {
 export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropModalProps) {
   const imgRef = useRef<HTMLImageElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useDialogFocus<HTMLDivElement>();
+  const [viewport, setViewport] = useState(measureViewport);
   const [frame, setFrame] = useState<Frame | null>(null);
   const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(null);
   const [minScale, setMinScale] = useState(0);
@@ -49,6 +67,38 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
   const dragState = useRef<{ pointerId: number; startX: number; startY: number; frame: Frame } | null>(
     null,
   );
+
+  useBodyScrollLock();
+
+  /**
+   * Re-measures the square and re-fits the photo inside it — the two always
+   * move together. The box is sized from the window rather than fixed, so a
+   * rotation changes it, and a frame scaled and clamped for the old box would
+   * leave gaps inside a larger one. Re-fitting resets the position, which is
+   * the honest answer: the crop it described no longer exists.
+   */
+  const fitToWindow = useCallback(() => {
+    const nextViewport = measureViewport();
+    setViewport(nextViewport);
+
+    const img = imgRef.current;
+    if (!img?.naturalWidth || !img.naturalHeight) return;
+    const { naturalWidth, naturalHeight } = img;
+    const cover = Math.max(nextViewport / naturalWidth, nextViewport / naturalHeight);
+    setMinScale(cover);
+    setFrame(
+      clampFrame(
+        {
+          scale: cover,
+          left: (nextViewport - naturalWidth * cover) / 2,
+          top: (nextViewport - naturalHeight * cover) / 2,
+        },
+        naturalWidth,
+        naturalHeight,
+        nextViewport,
+      ),
+    );
+  }, []);
 
   const handleImageLoad = useCallback(() => {
     const img = imgRef.current;
@@ -62,20 +112,8 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
     }
     setLoadError(null);
     setNaturalSize({ width: naturalWidth, height: naturalHeight });
-    const cover = Math.max(VIEWPORT / naturalWidth, VIEWPORT / naturalHeight);
-    setMinScale(cover);
-    setFrame(
-      clampFrame(
-        {
-          scale: cover,
-          left: (VIEWPORT - naturalWidth * cover) / 2,
-          top: (VIEWPORT - naturalHeight * cover) / 2,
-        },
-        naturalWidth,
-        naturalHeight,
-      ),
-    );
-  }, []);
+    fitToWindow();
+  }, [fitToWindow]);
 
   /**
    * A cached image can finish decoding before React attaches `onLoad`, and that
@@ -87,6 +125,11 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
   useEffect(() => {
     if (imgRef.current?.complete) handleImageLoad();
   }, [handleImageLoad]);
+
+  useEffect(() => {
+    window.addEventListener("resize", fitToWindow);
+    return () => window.removeEventListener("resize", fitToWindow);
+  }, [fitToWindow]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -114,6 +157,7 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
         { ...drag.frame, left: drag.frame.left + dx, top: drag.frame.top + dy },
         img.naturalWidth,
         img.naturalHeight,
+        viewport,
       ),
     );
   }
@@ -132,21 +176,22 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
       const { naturalWidth, naturalHeight } = img;
       // Keep the point at the viewport's center fixed in image-space while the
       // zoom level changes, instead of re-centering on every slider nudge.
-      const centerX = (VIEWPORT / 2 - frame.left) / frame.scale;
-      const centerY = (VIEWPORT / 2 - frame.top) / frame.scale;
+      const centerX = (viewport / 2 - frame.left) / frame.scale;
+      const centerY = (viewport / 2 - frame.top) / frame.scale;
       setFrame(
         clampFrame(
           {
             scale: nextScale,
-            left: VIEWPORT / 2 - centerX * nextScale,
-            top: VIEWPORT / 2 - centerY * nextScale,
+            left: viewport / 2 - centerX * nextScale,
+            top: viewport / 2 - centerY * nextScale,
           },
           naturalWidth,
           naturalHeight,
+          viewport,
         ),
       );
     },
-    [frame],
+    [frame, viewport],
   );
 
   /**
@@ -162,8 +207,10 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
    * always agree about the current zoom.
    */
   useEffect(() => {
-    const viewport = viewportRef.current;
-    if (!viewport || !frame) return;
+    // Named for the element, not the `viewport` size above it, which is a
+    // number and would otherwise be shadowed here.
+    const node = viewportRef.current;
+    if (!node || !frame) return;
 
     function onWheel(e: WheelEvent) {
       if (!frame) return;
@@ -172,8 +219,8 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
       rescale(Math.min(maxScale, Math.max(minScale, frame.scale * (1 - e.deltaY * 0.001))));
     }
 
-    viewport.addEventListener("wheel", onWheel, { passive: false });
-    return () => viewport.removeEventListener("wheel", onWheel);
+    node.addEventListener("wheel", onWheel, { passive: false });
+    return () => node.removeEventListener("wheel", onWheel);
   }, [frame, minScale, rescale]);
 
   function handleConfirm() {
@@ -192,7 +239,7 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
 
     // The source rectangle, in the original photo's own pixels, that the
     // viewport is currently framing.
-    const sourceSize = VIEWPORT / frame.scale;
+    const sourceSize = viewport / frame.scale;
     const sourceX = -frame.left / frame.scale;
     const sourceY = -frame.top / frame.scale;
     ctx.drawImage(img, sourceX, sourceY, sourceSize, sourceSize, 0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
@@ -204,23 +251,28 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-6"
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/80 px-4 py-6"
       role="presentation"
     >
+      {/* The dialog is taller than a phone in landscape, and centring it in a
+          fixed layer overflows at both ends at once — which put Cancel and
+          Confirm off-screen with no way to scroll to them. */}
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Position your profile photo"
-        className="flex w-full max-w-sm flex-col items-center gap-5 rounded-3xl bg-neutral-900 p-6"
+        tabIndex={-1}
+        className="flex max-h-full w-full max-w-sm flex-col items-center gap-5 overflow-y-auto overscroll-contain rounded-3xl bg-neutral-900 p-6 outline-none"
       >
-        <p className="text-xs uppercase tracking-widest text-neutral-500">
+        <p className="shrink-0 text-xs uppercase tracking-widest text-neutral-400">
           Drag to reposition
         </p>
 
         <div
           ref={viewportRef}
-          className="relative touch-none select-none overflow-hidden rounded-2xl bg-neutral-800"
-          style={{ width: VIEWPORT, height: VIEWPORT }}
+          className="relative shrink-0 touch-none select-none overflow-hidden rounded-2xl bg-neutral-800"
+          style={{ width: viewport, height: viewport }}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={endDrag}
@@ -263,15 +315,15 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
             style={{
               left: "50%",
               top: "50%",
-              width: VIEWPORT,
-              height: VIEWPORT,
+              width: viewport,
+              height: viewport,
               transform: "translate(-50%, -50%)",
               boxShadow: "0 0 0 9999px rgba(0,0,0,0.55)",
             }}
           />
         </div>
 
-        {loadError && <p className="text-center text-xs text-red-400">{loadError}</p>}
+        {loadError && <p className="shrink-0 text-center text-xs text-red-400">{loadError}</p>}
 
         <input
           type="range"
@@ -282,16 +334,16 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
           onChange={(e) => rescale(Number(e.target.value))}
           disabled={!frame}
           aria-label="Zoom"
-          className="w-full max-w-56 accent-white"
+          className="w-full max-w-56 shrink-0 accent-white"
         />
 
-        <div className="flex w-full items-center justify-between px-2">
+        <div className="flex w-full shrink-0 items-center justify-between px-2">
           <button
             type="button"
             onClick={onCancel}
             disabled={exporting}
             aria-label="Cancel"
-            className="flex h-11 w-11 items-center justify-center rounded-full bg-neutral-800 text-white transition-colors hover:bg-neutral-700 disabled:opacity-40"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-neutral-800 text-white transition-colors hover:bg-neutral-700 active:bg-neutral-700 disabled:opacity-40"
           >
             <CloseIcon className="h-5 w-5" />
           </button>
@@ -301,7 +353,7 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
             onClick={handleConfirm}
             disabled={!frame || exporting}
             aria-label="Confirm"
-            className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-black transition-transform hover:scale-105 disabled:opacity-40"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white text-black transition-transform hover:scale-105 active:scale-95 disabled:opacity-40"
           >
             <CheckIcon className="h-5 w-5" />
           </button>

@@ -149,14 +149,16 @@ function SignedInApp({
   }
 
   return (
-    <div className="min-h-screen bg-[#0c1014]">
+    <div className="min-h-dvh bg-[#0c1014]">
       <NavBar
         active={view}
         onChange={setView}
         onAddPost={() => setComposing(true)}
       />
 
-      <main className="flex justify-center px-4 pb-24 pt-8 md:px-6 md:py-24">
+      {/* The bottom padding clears the fixed nav *and* the home-indicator
+          band it now sits above; `md:py-24` drops both once the nav is static. */}
+      <main className="flex justify-center px-4 pb-[calc(7rem+env(safe-area-inset-bottom))] pt-8 md:px-6 md:py-24">
         {view === "home" ? (
           <div className="flex w-full max-w-md flex-col gap-10 md:max-w-none md:gap-16">
             {posts.map((post) => (
@@ -166,7 +168,7 @@ function SignedInApp({
               <p className="text-center text-sm text-red-400">{feedError}</p>
             )}
             {!loadingFeed && !feedError && posts.length === 0 && (
-              <p className="text-center text-sm text-neutral-500">
+              <p className="text-center text-sm text-neutral-400">
                 Nothing shared yet. Tap + to share your photo.
               </p>
             )}
@@ -182,7 +184,7 @@ function SignedInApp({
               <button
                 type="button"
                 onClick={() => setShowFriendsPopup(true)}
-                className="text-neutral-300 transition-colors hover:text-white"
+                className="-m-2 p-2 text-neutral-300 transition-colors hover:text-white active:text-white"
               >
                 {friends.length} Friends
               </button>
@@ -193,7 +195,7 @@ function SignedInApp({
             <button
               type="button"
               onClick={onLogout}
-              className="text-xs text-neutral-400 transition-colors hover:text-white"
+              className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
             >
               Log out
             </button>
@@ -304,7 +306,7 @@ function App() {
   }
 
   if (checkingSession) {
-    return <div className="min-h-screen bg-[#0c1014]" />;
+    return <div className="min-h-dvh bg-[#0c1014]" />;
   }
 
   if (!user) {

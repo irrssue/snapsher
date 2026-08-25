@@ -137,10 +137,10 @@ export function FriendsTab({ onFriendsChanged }: FriendsTabProps) {
         <button
           type="button"
           onClick={() => setSubTab("add")}
-          className={`rounded-full px-4 py-1 text-xs transition-colors ${
+          className={`rounded-full px-4 py-2 text-xs transition-colors ${
             subTab === "add"
               ? "bg-neutral-200 text-black"
-              : "text-neutral-300 hover:text-white"
+              : "text-neutral-300 hover:text-white active:text-white"
           }`}
         >
           Add
@@ -148,10 +148,10 @@ export function FriendsTab({ onFriendsChanged }: FriendsTabProps) {
         <button
           type="button"
           onClick={() => setSubTab("requests")}
-          className={`flex items-center gap-1.5 rounded-full px-4 py-1 text-xs transition-colors ${
+          className={`flex items-center gap-1.5 rounded-full px-4 py-2 text-xs transition-colors ${
             subTab === "requests"
               ? "bg-neutral-200 text-black"
-              : "text-neutral-300 hover:text-white"
+              : "text-neutral-300 hover:text-white active:text-white"
           }`}
         >
           Requests
@@ -178,11 +178,21 @@ export function FriendsTab({ onFriendsChanged }: FriendsTabProps) {
           <label className="relative block">
             <SearchIcon className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
             <input
-              type="text"
+              type="search"
+              inputMode="search"
+              enterKeyHint="search"
+              // Autocorrect rewrites the username as it is typed — "irrssue"
+              // becomes "issue" — and the search then truthfully reports that
+              // nobody matches a name the user never entered.
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              maxLength={30}
               placeholder="Search all users"
-              className="w-full rounded-full bg-neutral-800 py-2 pl-10 pr-4 text-sm text-white placeholder:text-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-500"
+              aria-label="Search all users"
+              className="w-full rounded-full bg-neutral-800 py-2 pl-10 pr-4 text-sm text-white placeholder:text-neutral-400 focus:outline-none focus:ring-1 focus:ring-neutral-500"
             />
           </label>
 
@@ -199,10 +209,10 @@ export function FriendsTab({ onFriendsChanged }: FriendsTabProps) {
                       type="button"
                       disabled={alreadySent}
                       onClick={() => handleSendFriendRequest(discoverableUser.id)}
-                      className={`shrink-0 rounded-full px-4 py-1.5 text-xs transition-colors ${
+                      className={`shrink-0 rounded-full px-4 py-2.5 text-xs transition-colors ${
                         alreadySent
                           ? "bg-neutral-900 text-neutral-500"
-                          : "bg-white text-black hover:opacity-90"
+                          : "bg-white text-black hover:opacity-90 active:opacity-70"
                       }`}
                     >
                       {alreadySent ? "Requested" : "Add"}
@@ -215,7 +225,7 @@ export function FriendsTab({ onFriendsChanged }: FriendsTabProps) {
             {/* `searching` covers both the debounce and the request in flight,
                 so "No one matches" is only ever an answer, never a guess. */}
             {discoverableUsers.length === 0 && !searching && (
-              <p className="pt-8 text-center text-sm text-neutral-500">
+              <p className="break-words pt-8 text-center text-sm text-neutral-400">
                 {query.trim() ? `No one matches "${query}".` : "Search for someone to add."}
               </p>
             )}
@@ -233,14 +243,14 @@ export function FriendsTab({ onFriendsChanged }: FriendsTabProps) {
                   <button
                     type="button"
                     onClick={() => handleDeclineRequest(request)}
-                    className="rounded-full bg-neutral-800 px-4 py-1.5 text-xs text-neutral-300 transition-colors hover:text-white"
+                    className="rounded-full bg-neutral-800 px-4 py-2.5 text-xs text-neutral-300 transition-colors hover:text-white active:text-white"
                   >
                     Decline
                   </button>
                   <button
                     type="button"
                     onClick={() => handleAcceptRequest(request)}
-                    className="rounded-full bg-white px-4 py-1.5 text-xs text-black transition-colors hover:opacity-90"
+                    className="rounded-full bg-white px-4 py-2.5 text-xs text-black transition-colors hover:opacity-90 active:opacity-70"
                   >
                     Accept
                   </button>
@@ -250,7 +260,7 @@ export function FriendsTab({ onFriendsChanged }: FriendsTabProps) {
           ))}
 
           {requests.length === 0 && !loadError && (
-            <p className="pt-8 text-center text-sm text-neutral-500">No pending requests.</p>
+            <p className="pt-8 text-center text-sm text-neutral-400">No pending requests.</p>
           )}
         </div>
       )}
@@ -268,10 +278,16 @@ export function PersonRow({
   action: ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-2xl px-2 py-2.5 transition-colors hover:bg-neutral-900">
+    <div className="flex items-center gap-3 rounded-2xl px-2 py-2.5 transition-colors hover:bg-neutral-900 active:bg-neutral-900">
       <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-700">
         {avatarUrl ? (
-          <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
+          <img
+            src={avatarUrl}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            className="h-full w-full object-cover"
+          />
         ) : (
           <PersonIcon className="h-6 w-6 text-neutral-400" />
         )}
