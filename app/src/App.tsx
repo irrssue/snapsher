@@ -105,7 +105,7 @@ function SignedInApp({
   }
 
   return (
-    <div className="min-h-screen bg-black">
+    <div className="min-h-screen bg-[#0c1014]">
       <NavBar
         active={view}
         onChange={setView}
@@ -239,7 +239,7 @@ function App() {
   }
 
   if (checkingSession) {
-    return <div className="min-h-screen bg-black" />;
+    return <div className="min-h-screen bg-[#0c1014]" />;
   }
 
   if (!user) {

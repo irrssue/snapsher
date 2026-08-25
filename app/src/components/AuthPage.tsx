@@ -34,7 +34,7 @@ export function AuthPage({
   submitting,
 }: AuthPageProps) {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-black px-6">
+    <div className="flex min-h-screen items-center justify-center bg-[#0c1014] px-6">
       {step === "credentials" ? (
         <form
           key="credentials"
