@@ -12,7 +12,6 @@ type NavBarProps = {
 const TABS: { key: View; label: string; icon: (className: string) => ReactElement }[] = [
   { key: "home", label: "Home", icon: (c) => <HomeIcon className={c} /> },
   { key: "friends", label: "Search", icon: (c) => <SearchIcon className={c} /> },
-  { key: "profile", label: "Profile", icon: (c) => <PersonIcon className={c} /> },
 ];
 
 export function NavBar({ active, onChange, onAddPost }: NavBarProps) {
@@ -34,15 +33,25 @@ export function NavBar({ active, onChange, onAddPost }: NavBarProps) {
             {tab.icon("h-6 w-6")}
           </button>
         ))}
+        <button
+          type="button"
+          aria-label="Add post"
+          onClick={onAddPost}
+          className="flex h-11 w-11 items-center justify-center rounded-full text-neutral-300 transition-colors hover:text-white"
+        >
+          <PlusIcon className="h-6 w-6" />
+        </button>
       </div>
 
       <button
         type="button"
-        aria-label="Add post"
-        onClick={onAddPost}
-        className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-black transition-transform hover:scale-105"
+        aria-label="Profile"
+        onClick={() => onChange("profile")}
+        className={`flex h-9 w-9 items-center justify-center rounded-full transition-transform hover:scale-105 ${
+          active === "profile" ? "bg-neutral-200 text-black" : "bg-white text-black"
+        }`}
       >
-        <PlusIcon className="h-4 w-4" />
+        <PersonIcon className="h-4 w-4" />
       </button>
     </nav>
   );
