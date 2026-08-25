@@ -67,6 +67,10 @@ export async function logout(): Promise<void> {
   await api("/api/auth/logout", { method: "POST" }).catch(() => undefined);
 }
 
+export async function deleteAccount(password: string): Promise<void> {
+  await api("/api/auth/account", { method: "DELETE", body: { password } });
+}
+
 export async function updateAvatar(photo: string): Promise<User> {
   const { user } = await api<{ user: User }>("/api/auth/avatar", {
     method: "PUT",

@@ -34,10 +34,12 @@ import type { Post, PostSummary, User } from "./types";
 function SignedInApp({
   user,
   onLogout,
+  onAccountDeleted,
   onAvatarChange,
 }: {
   user: User;
   onLogout: () => void;
+  onAccountDeleted: () => void;
   onAvatarChange: (user: User) => void;
 }) {
   const [view, setView] = useState<"home" | "friends" | "profile">("home");
@@ -204,7 +206,12 @@ function SignedInApp({
           <FriendsTab onFriendsChanged={handleFriendsChanged} onViewProfile={setViewingUserId} />
         ) : (
           <div className="flex w-full max-w-md flex-col items-center gap-8 pt-8 md:pt-16">
-            <ProfileAvatar user={user} onAvatarChange={onAvatarChange} />
+            <ProfileAvatar
+              user={user}
+              onAvatarChange={onAvatarChange}
+              onLogout={onLogout}
+              onAccountDeleted={onAccountDeleted}
+            />
             <span className="text-white">@{user.username}</span>
 
             <div className="flex items-center gap-6 text-sm">
@@ -219,13 +226,6 @@ function SignedInApp({
             </div>
 
             <Countdown nextAllowedAt={nextAllowedAt} clockOffset={clockOffset} />
-            <button
-              type="button"
-              onClick={onLogout}
-              className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
-            >
-              Log out
-            </button>
 
             <PostGrid posts={myPosts} />
           </div>
@@ -412,6 +412,19 @@ function App() {
     setAuthError(null);
   }
 
+  /**
+   * The delete request itself already ends the session server-side, so this
+   * only resets local state — the same reset as logging out, minus the
+   * now-pointless call to `/api/auth/logout`.
+   */
+  function handleAccountDeleted() {
+    setUser(null);
+    setAuthStep("credentials");
+    setPendingCredentials(null);
+    setResendAt(null);
+    setAuthError(null);
+  }
+
   if (checkingSession) {
     return <div className="min-h-dvh bg-[#0c1014]" />;
   }
@@ -439,6 +452,7 @@ function App() {
       key={user.id}
       user={user}
       onLogout={handleLogout}
+      onAccountDeleted={handleAccountDeleted}
       onAvatarChange={setUser}
     />
   );

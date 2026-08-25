@@ -105,6 +105,8 @@ export const config = {
     signUp: { windowMs: HOUR, max: 5 },
     createPost: { windowMs: HOUR, max: 10 },
     updateAvatar: { windowMs: HOUR, max: 20 },
+    /** A password-guessing surface, same shape as sign-in — kept just as tight. */
+    deleteAccount: { windowMs: 15 * MINUTE, max: 10 },
     /**
      * Sending a request is otherwise unbounded: the 409 that stops a repeat
      * send is cleared by cancelling the request, and cancelling is something

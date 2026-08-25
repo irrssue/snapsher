@@ -4,11 +4,12 @@ import path from "node:path";
 import express, { Router, type Response } from "express";
 import bcrypt from "bcryptjs";
 import { config } from "./config.js";
-import { db, isUniqueConstraintError, type UserRow } from "./db.js";
+import { db, isUniqueConstraintError, type PostRow, type UserRow } from "./db.js";
 import { createLockout, rateLimit, rejectLocked } from "./rateLimit.js";
 import { asyncRoute } from "./security.js";
 import { endSession, requireAuth, startSession, toPublicUser } from "./sessions.js";
 import { avatarsDir } from "./avatarsStore.js";
+import { uploadsDir } from "./postsStore.js";
 import { codeHashMatches, generateCode, hashCode, sendVerificationEmail } from "./email.js";
 import {
   deletePendingSignup,
@@ -537,5 +538,53 @@ authRouter.put(
 
     const updated = db.prepare("SELECT * FROM users WHERE id = ?").get(user.id) as UserRow;
     res.json({ user: toPublicUser(updated) });
+  }),
+);
+
+/**
+ * Requires the password again rather than trusting the session alone: the
+ * session already proves "signed in", but a browser left unlocked or a
+ * hijacked tab shouldn't be enough on its own to permanently destroy an
+ * account. Same rate limiter shape as `/continue` for the same reason — this
+ * is a password-guessing surface too.
+ */
+authRouter.delete(
+  "/account",
+  requireAuth,
+  rateLimit(config.rateLimits.deleteAccount),
+  smallJsonBody,
+  asyncRoute(async (req, res) => {
+    const { password } = req.body ?? {};
+    if (typeof password !== "string" || password.length === 0) {
+      return res.status(400).json({ error: "Enter your password to confirm." });
+    }
+
+    const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.auth!.user.id) as UserRow;
+    if (!(await verifyPassword(password, user.password_hash))) {
+      return res.status(401).json(INVALID_CREDENTIALS);
+    }
+
+    const photoFiles = (
+      db.prepare("SELECT photo_file FROM posts WHERE user_id = ?").all(user.id) as Pick<
+        PostRow,
+        "photo_file"
+      >[]
+    ).map((row) => row.photo_file);
+
+    // The row going away cascades to sessions, posts, likes, comments, and
+    // friend requests (see the ON DELETE CASCADE clauses in db.ts) — only the
+    // files those posts and the avatar point to live outside the database and
+    // need cleaning up by hand, below.
+    db.prepare("DELETE FROM users WHERE id = ?").run(user.id);
+
+    await Promise.all([
+      ...(user.avatar_file
+        ? [fs.promises.rm(path.join(avatarsDir, user.avatar_file), { force: true })]
+        : []),
+      ...photoFiles.map((file) => fs.promises.rm(path.join(uploadsDir, file), { force: true })),
+    ]);
+
+    endSession(req, res);
+    res.status(204).end();
   }),
 );

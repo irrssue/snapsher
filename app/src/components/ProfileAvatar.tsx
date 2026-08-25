@@ -1,18 +1,24 @@
 import { useEffect, useRef, useState } from "react";
-import { updateAvatar } from "../api/auth";
+import { deleteAccount, updateAvatar } from "../api/auth";
 import { AvatarCropModal } from "./AvatarCropModal";
-import { PencilIcon, PersonIcon } from "./icons";
+import { DeleteAccountModal } from "./DeleteAccountModal";
+import { SettingsModal } from "./SettingsModal";
+import { GearIcon, PersonIcon } from "./icons";
 import type { User } from "../types";
 
 type ProfileAvatarProps = {
   user: User;
   onAvatarChange: (user: User) => void;
+  onLogout: () => void;
+  onAccountDeleted: () => void;
 };
 
-export function ProfileAvatar({ user, onAvatarChange }: ProfileAvatarProps) {
+export function ProfileAvatar({ user, onAvatarChange, onLogout, onAccountDeleted }: ProfileAvatarProps) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pickedImageUrl, setPickedImageUrl] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showDeleteAccount, setShowDeleteAccount] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -53,15 +59,19 @@ export function ProfileAvatar({ user, onAvatarChange }: ProfileAvatarProps) {
     }
   }
 
+  function handleEditPhoto() {
+    setShowSettings(false);
+    fileInputRef.current?.click();
+  }
+
+  async function handleDeleteAccount(password: string) {
+    await deleteAccount(password);
+    onAccountDeleted();
+  }
+
   return (
     <div className="flex flex-col items-center gap-2">
-      <button
-        type="button"
-        onClick={() => fileInputRef.current?.click()}
-        disabled={uploading}
-        aria-label={user.avatarUrl ? "Change profile photo" : "Add a profile photo"}
-        className="group relative h-24 w-24 shrink-0 rounded-full disabled:opacity-70"
-      >
+      <div className="group relative h-24 w-24 shrink-0">
         <span className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-neutral-300">
           {user.avatarUrl ? (
             <img
@@ -76,16 +86,22 @@ export function ProfileAvatar({ user, onAvatarChange }: ProfileAvatarProps) {
           )}
         </span>
 
-        <span className="absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full bg-white text-black ring-2 ring-black transition-transform group-hover:scale-105 group-active:scale-95">
-          <PencilIcon className="h-3.5 w-3.5" />
-        </span>
-      </button>
+        <button
+          type="button"
+          onClick={() => setShowSettings(true)}
+          aria-label="Settings"
+          className="absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full bg-white text-black ring-2 ring-black transition-transform hover:scale-105 active:scale-95"
+        >
+          <GearIcon className="h-4 w-4" />
+        </button>
+      </div>
 
       <input
         ref={fileInputRef}
         type="file"
         accept="image/*"
         onChange={handleFileChange}
+        disabled={uploading}
         className="hidden"
       />
 
@@ -96,6 +112,25 @@ export function ProfileAvatar({ user, onAvatarChange }: ProfileAvatarProps) {
           imageUrl={pickedImageUrl}
           onCancel={closeCropper}
           onConfirm={handleCropConfirm}
+        />
+      )}
+
+      {showSettings && (
+        <SettingsModal
+          onClose={() => setShowSettings(false)}
+          onEditPhoto={handleEditPhoto}
+          onLogout={onLogout}
+          onDeleteAccount={() => {
+            setShowSettings(false);
+            setShowDeleteAccount(true);
+          }}
+        />
+      )}
+
+      {showDeleteAccount && (
+        <DeleteAccountModal
+          onCancel={() => setShowDeleteAccount(false)}
+          onConfirm={handleDeleteAccount}
         />
       )}
     </div>
