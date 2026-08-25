@@ -1,4 +1,5 @@
 import { api } from "./http";
+import type { PostSummary } from "../types";
 
 export type Friend = {
   id: number;
@@ -63,4 +64,10 @@ export async function removeFriend(friendUserId: number): Promise<void> {
 export async function fetchUserProfile(userId: number): Promise<PublicProfile> {
   const { user } = await api<{ user: PublicProfile }>(`/api/users/${userId}`);
   return user;
+}
+
+/** Backs the Instagram-style grid on a profile screen — own or someone else's. */
+export async function fetchUserPosts(userId: number): Promise<PostSummary[]> {
+  const { posts } = await api<{ posts: PostSummary[] }>(`/api/users/${userId}/posts`);
+  return posts;
 }

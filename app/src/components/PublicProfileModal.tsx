@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { CloseIcon, PersonIcon } from "./icons";
 import { useBodyScrollLock, useDialogFocus } from "../hooks";
-import { fetchUserProfile, type PublicProfile } from "../api/friends";
+import { fetchUserProfile, fetchUserPosts, type PublicProfile } from "../api/friends";
+import { PostGrid } from "./PostGrid";
+import type { PostSummary } from "../types";
 
 type PublicProfileModalProps = {
   userId: number;
@@ -10,11 +12,14 @@ type PublicProfileModalProps = {
 
 /**
  * Any other user's profile, as seen by someone who isn't its owner: avatar,
- * username, and post count only. No friends count here on purpose — per
- * `about.md`, that number is only ever shown to the account owner themself.
+ * username, post count, and their post grid. No friends count here on
+ * purpose — per `about.md`, that number is only ever shown to the account
+ * owner themself. The grid itself has no such restriction: any signed-in
+ * member may browse it, friend or not.
  */
 export function PublicProfileModal({ userId, onClose }: PublicProfileModalProps) {
   const [profile, setProfile] = useState<PublicProfile | null>(null);
+  const [posts, setPosts] = useState<PostSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const dialogRef = useDialogFocus<HTMLDivElement>();
 
@@ -31,6 +36,7 @@ export function PublicProfileModal({ userId, onClose }: PublicProfileModalProps)
   useEffect(() => {
     let active = true;
     setProfile(null);
+    setPosts([]);
     setError(null);
     fetchUserProfile(userId)
       .then((next) => {
@@ -38,6 +44,15 @@ export function PublicProfileModal({ userId, onClose }: PublicProfileModalProps)
       })
       .catch((err) => {
         if (active) setError(err instanceof Error ? err.message : "Couldn't load that profile.");
+      });
+    // Fetched independently of the profile above: a post-grid failure
+    // shouldn't block the avatar/username/count from showing.
+    fetchUserPosts(userId)
+      .then((next) => {
+        if (active) setPosts(next);
+      })
+      .catch(() => {
+        // The grid just stays empty — not worth its own error message here.
       });
     return () => {
       active = false;
@@ -57,7 +72,7 @@ export function PublicProfileModal({ userId, onClose }: PublicProfileModalProps)
         aria-label="Profile"
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
-        className="flex w-full max-w-sm flex-col rounded-3xl bg-neutral-900 p-5 outline-none"
+        className="flex max-h-[85vh] w-full max-w-sm flex-col overflow-y-auto rounded-3xl bg-neutral-900 p-5 outline-none"
       >
         <div className="flex shrink-0 items-center justify-end">
           <button
@@ -94,6 +109,8 @@ export function PublicProfileModal({ userId, onClose }: PublicProfileModalProps)
               <span className="text-white">@{profile.username}</span>
 
               <span className="text-sm text-neutral-300">{profile.postCount} posts</span>
+
+              <PostGrid posts={posts} />
             </>
           )}
         </div>

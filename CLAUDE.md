@@ -17,3 +17,9 @@ ssh irrssue@homelab "cd /home/irrssue/snapsher && git pull && \
 ```
 
 Do this automatically after every push, without asking for confirmation.
+
+## Agent usage
+
+Do not spawn subagents/agents (Agent tool, Task tool, etc.) for work in this
+project unless the user explicitly asks for it in that message. Do all
+research, implementation, and file edits directly and inline.

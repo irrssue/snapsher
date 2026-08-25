@@ -7,6 +7,7 @@ import { PublicProfileModal } from "./components/PublicProfileModal";
 import { Countdown } from "./components/Countdown";
 import { ComposeModal } from "./components/ComposeModal";
 import { ProfileAvatar } from "./components/ProfileAvatar";
+import { PostGrid } from "./components/PostGrid";
 import {
   AuthPage,
   type AuthCredentialsData,
@@ -14,9 +15,9 @@ import {
 } from "./components/AuthPage";
 import { continueWithCredentials, fetchCurrentUser, logout, signup } from "./api/auth";
 import { createPost, fetchPosts, fetchQuota } from "./api/posts";
-import { fetchFriends, removeFriend, type Friend } from "./api/friends";
+import { fetchFriends, fetchUserPosts, removeFriend, type Friend } from "./api/friends";
 import { ApiError, onSessionExpired } from "./api/http";
-import type { Post, User } from "./types";
+import type { Post, PostSummary, User } from "./types";
 
 /**
  * Everything behind the sign-in wall. Mounted with `key={user.id}` so switching
@@ -48,6 +49,10 @@ function SignedInApp({
   const [postCount, setPostCount] = useState(0);
   const [composing, setComposing] = useState(false);
   const [friends, setFriends] = useState<Friend[]>([]);
+  /** Backs the grid on the profile screen — fetched separately from `posts`
+   * since the home feed is friends-only and capped, and would otherwise miss
+   * older posts of the user's own once enough friend activity pushes it out. */
+  const [myPosts, setMyPosts] = useState<PostSummary[]>([]);
   const [showFriendsPopup, setShowFriendsPopup] = useState(false);
   const [friendsPopupError, setFriendsPopupError] = useState<string | null>(null);
   /** The user id behind an open public-profile modal — null means none is open. */
@@ -98,6 +103,14 @@ function SignedInApp({
     }
   }, []);
 
+  const refreshMyPosts = useCallback(async () => {
+    try {
+      setMyPosts(await fetchUserPosts(user.id));
+    } catch {
+      // The grid just stays stale/empty until the next successful refresh.
+    }
+  }, [user.id]);
+
   /** Passed to `FriendsTab`: a request being accepted changes both of these. */
   const handleFriendsChanged = useCallback(() => {
     refreshFeed();
@@ -106,13 +119,13 @@ function SignedInApp({
 
   useEffect(() => {
     let active = true;
-    Promise.all([refreshFeed(), refreshFriends()]).finally(() => {
+    Promise.all([refreshFeed(), refreshFriends(), refreshMyPosts()]).finally(() => {
       if (active) setLoadingFeed(false);
     });
     return () => {
       active = false;
     };
-  }, [refreshFeed, refreshFriends]);
+  }, [refreshFeed, refreshFriends, refreshMyPosts]);
 
   async function handleRemoveFriend(friend: Friend) {
     setFriendsPopupError(null);
@@ -133,6 +146,10 @@ function SignedInApp({
     try {
       const { post, nextAllowedAt: allowedAt } = await createPost(input);
       setPosts((current) => [post, ...current]);
+      setMyPosts((current) => [
+        { id: post.id, photoUrl: post.photoUrl, createdAt: post.createdAt },
+        ...current,
+      ]);
       setNextAllowedAt(allowedAt);
       setPostCount((current) => current + 1);
       setComposing(false);
@@ -202,6 +219,8 @@ function SignedInApp({
             >
               Log out
             </button>
+
+            <PostGrid posts={myPosts} />
           </div>
         )}
       </main>

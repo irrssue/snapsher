@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { db, type PostRow } from "./db.js";
 import { avatarUrlFor } from "./avatarsStore.js";
-import { areFriends, friendIdsFor } from "./friendsStore.js";
+import { friendIdsFor } from "./friendsStore.js";
 import { likeStatsFor, type LikeStats } from "./likesStore.js";
 import { commentCountFor } from "./commentsStore.js";
 
@@ -31,7 +31,9 @@ const FEED_LIMIT = 100;
  *   - feed        — a member may read their own posts and their friends' posts
  *   - quota       — a user may only ever see their own posting window
  *   - create      — the author is taken from the session, never from the body
- *   - photo bytes — readable only if it belongs to a post the actor may read
+ *   - profile grid / photo bytes — public within the app: any signed-in
+ *     member may browse any profile's grid and load its photos, friend or
+ *     not, the same audience already allowed a profile's avatar and post count
  */
 export type Actor = { userId: number };
 
@@ -127,6 +129,9 @@ const selectLastPostAt = db.prepare(
   "SELECT created_at FROM posts WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
 );
 const selectPostCount = db.prepare("SELECT COUNT(*) AS count FROM posts WHERE user_id = ?");
+const selectUserPosts = db.prepare(
+  "SELECT id, photo_file, created_at FROM posts WHERE user_id = ? ORDER BY created_at DESC",
+);
 const selectPhotoOwner = db.prepare(
   "SELECT user_id FROM posts WHERE photo_file = ?",
 );
@@ -230,23 +235,37 @@ export function postCountFor(userId: number): number {
   return count;
 }
 
+export type PostSummary = { id: string; photoUrl: string; createdAt: number };
+
+/**
+ * The grid on a profile screen — anyone's, friend or not. A profile's post
+ * count is already public (see `postCountFor`), and this is the same policy
+ * applied to the photos themselves: an authenticated member may browse the
+ * grid on any profile, same as they can already see its avatar and count.
+ */
+export function listPostsFor(userId: number): PostSummary[] {
+  const rows = selectUserPosts.all(userId) as Pick<
+    PostRow,
+    "id" | "photo_file" | "created_at"
+  >[];
+  return rows.map((row) => ({
+    id: String(row.id),
+    photoUrl: `/uploads/${row.photo_file}`,
+    createdAt: row.created_at,
+  }));
+}
+
 /**
  * Resolves an upload filename to a path on disk, but only for a signed-in
- * actor, only when the file actually backs a post, and only when that post's
- * author is the actor or one of their friends — the same audience as the
- * feed itself. The caller answers 404 either way so a rejection never
- * confirms the file exists.
- *
- * This runs once per photo, so a single feed load calls it up to 100 times;
- * `areFriends` asks about the one author that matters instead of rebuilding
- * and sorting the actor's entire friend list on each of those calls.
+ * actor and only when the file actually backs a real post — the same
+ * "authenticated member, any profile" policy as `listPostsFor`. The caller
+ * answers 404 either way so a rejection never confirms the file exists.
  */
 export function resolvePhotoFor(actor: Actor, photoFile: string): string | null {
   assertActor(actor);
 
   const post = selectPhotoOwner.get(photoFile) as Pick<PostRow, "user_id"> | undefined;
   if (!post) return null;
-  if (post.user_id !== actor.userId && !areFriends(actor, post.user_id)) return null;
 
   return path.join(uploadsDir, photoFile);
 }

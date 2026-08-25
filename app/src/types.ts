@@ -21,6 +21,13 @@ export type Post = {
   commentCount: number;
 };
 
+/** The minimal shape a profile's post grid needs — no likes, no description. */
+export type PostSummary = {
+  id: string;
+  photoUrl: string;
+  createdAt: number;
+};
+
 export type Liker = {
   id: number;
   username: string;

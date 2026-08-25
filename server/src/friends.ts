@@ -14,7 +14,7 @@ import {
   sendFriendRequest,
   type Actor,
 } from "./friendsStore.js";
-import { postCountFor } from "./postsStore.js";
+import { listPostsFor, postCountFor } from "./postsStore.js";
 
 function actorOf(req: express.Request): Actor {
   return { userId: req.auth!.user.id };
@@ -124,4 +124,18 @@ usersRouter.get("/:id", (req, res) => {
   if (!user) return res.status(404).json({ error: "Not found." });
 
   res.json({ user: { ...user, postCount: postCountFor(targetId) } });
+});
+
+/**
+ * The Instagram-style grid on a profile screen — own or someone else's.
+ * Same audience as `/:id` above: any signed-in member, not just friends.
+ */
+usersRouter.get("/:id/posts", (req, res) => {
+  const targetId = parseId(req.params.id);
+  if (targetId === null) return res.status(404).json({ error: "Not found." });
+
+  const user = getPublicUser(targetId);
+  if (!user) return res.status(404).json({ error: "Not found." });
+
+  res.json({ posts: listPostsFor(targetId) });
 });
