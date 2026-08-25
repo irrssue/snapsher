@@ -1,4 +1,4 @@
-import { PlusIcon } from "./icons";
+import { HomeIcon, PlusIcon, SearchIcon, PersonIcon } from "./icons";
 
 type View = "home" | "friends" | "profile";
 
@@ -8,10 +8,10 @@ type NavBarProps = {
   onAddPost?: () => void;
 };
 
-const TABS: { key: View; label: string }[] = [
-  { key: "home", label: "Home" },
-  { key: "friends", label: "Friends" },
-  { key: "profile", label: "Profile" },
+const TABS: { key: View; label: string; icon: (className: string) => JSX.Element }[] = [
+  { key: "home", label: "Home", icon: (c) => <HomeIcon className={c} /> },
+  { key: "friends", label: "Search", icon: (c) => <SearchIcon className={c} /> },
+  { key: "profile", label: "Profile", icon: (c) => <PersonIcon className={c} /> },
 ];
 
 export function NavBar({ active, onChange, onAddPost }: NavBarProps) {
@@ -22,14 +22,15 @@ export function NavBar({ active, onChange, onAddPost }: NavBarProps) {
           <button
             key={tab.key}
             type="button"
+            aria-label={tab.label}
             onClick={() => onChange(tab.key)}
-            className={`rounded-full px-5 py-1.5 text-sm transition-colors ${
+            className={`flex h-11 w-11 items-center justify-center rounded-full transition-colors ${
               active === tab.key
                 ? "bg-neutral-200 text-black"
                 : "text-neutral-300 hover:text-white"
             }`}
           >
-            {tab.label}
+            {tab.icon("h-6 w-6")}
           </button>
         ))}
       </div>
