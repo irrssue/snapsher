@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { HomeIcon, PlusIcon, SearchIcon, PersonIcon } from "./icons";
 
 type View = "home" | "friends" | "profile";
@@ -8,7 +9,7 @@ type NavBarProps = {
   onAddPost?: () => void;
 };
 
-const TABS: { key: View; label: string; icon: (className: string) => JSX.Element }[] = [
+const TABS: { key: View; label: string; icon: (className: string) => ReactElement }[] = [
   { key: "home", label: "Home", icon: (c) => <HomeIcon className={c} /> },
   { key: "friends", label: "Search", icon: (c) => <SearchIcon className={c} /> },
   { key: "profile", label: "Profile", icon: (c) => <PersonIcon className={c} /> },
