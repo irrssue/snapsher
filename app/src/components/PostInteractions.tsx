@@ -60,6 +60,8 @@ export function PostInteractions({
   const pendingLike = useRef(false);
   const likersRef = useRef<HTMLDivElement>(null);
   const likersToggleRef = useRef<HTMLButtonElement>(null);
+  const commentsPanelRef = useRef<HTMLDivElement>(null);
+  const commentsToggleRef = useRef<HTMLButtonElement>(null);
 
   const [commentsOpen, setCommentsOpen] = useState(false);
   /** Null means "not loaded yet", which is distinct from an empty thread. */
@@ -108,6 +110,24 @@ export function PostInteractions({
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [likersOpen]);
+
+  /**
+   * Same reasoning as the likers popover: no backdrop, so a press anywhere
+   * outside the panel (or its own toggle, to avoid an instant reopen) closes
+   * it, mirroring what the (x) button already does.
+   */
+  useEffect(() => {
+    if (!commentsOpen) return;
+
+    function onPointerDown(e: PointerEvent) {
+      const target = e.target as Node;
+      if (commentsPanelRef.current?.contains(target) || commentsToggleRef.current?.contains(target)) return;
+      setCommentsOpen(false);
+    }
+
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [commentsOpen]);
 
   useEffect(() => {
     if (!commentsOpen) return;
@@ -205,7 +225,10 @@ export function PostInteractions({
          * own height on desktop so the two read as a matched pair, side by
          * side, the way a lightbox pairs an image with its comment rail.
          */
-        <div className="order-1 flex h-[26rem] flex-col overflow-hidden rounded-3xl bg-neutral-900 ring-1 ring-white/5 md:order-none md:h-[21.6rem]">
+        <div
+          ref={commentsPanelRef}
+          className="order-1 flex h-[26rem] flex-col overflow-hidden rounded-3xl bg-neutral-900 ring-1 ring-white/5 md:order-none md:h-[21.6rem]"
+        >
           <div className="flex items-center gap-2 border-b border-white/5 px-4 py-3">
             <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-300">
               {avatarUrl ? (
@@ -451,6 +474,7 @@ export function PostInteractions({
               <HeartIcon className="h-[1.8rem] w-[1.8rem]" />
             </button>
             <button
+              ref={commentsToggleRef}
               type="button"
               aria-label="Comments"
               aria-expanded={commentsOpen}
