@@ -130,7 +130,7 @@ const selectLastPostAt = db.prepare(
 );
 const selectPostCount = db.prepare("SELECT COUNT(*) AS count FROM posts WHERE user_id = ?");
 const selectUserPosts = db.prepare(
-  "SELECT id, photo_file, created_at FROM posts WHERE user_id = ? ORDER BY created_at DESC",
+  "SELECT id, description, photo_file, created_at FROM posts WHERE user_id = ? ORDER BY created_at DESC",
 );
 const selectPhotoOwner = db.prepare(
   "SELECT user_id FROM posts WHERE photo_file = ?",
@@ -235,7 +235,12 @@ export function postCountFor(userId: number): number {
   return count;
 }
 
-export type PostSummary = { id: string; photoUrl: string; createdAt: number };
+export type PostSummary = {
+  id: string;
+  photoUrl: string;
+  createdAt: number;
+  description: string | null;
+};
 
 /**
  * The grid on a profile screen — anyone's, friend or not. A profile's post
@@ -246,12 +251,13 @@ export type PostSummary = { id: string; photoUrl: string; createdAt: number };
 export function listPostsFor(userId: number): PostSummary[] {
   const rows = selectUserPosts.all(userId) as Pick<
     PostRow,
-    "id" | "photo_file" | "created_at"
+    "id" | "description" | "photo_file" | "created_at"
   >[];
   return rows.map((row) => ({
     id: String(row.id),
     photoUrl: `/uploads/${row.photo_file}`,
     createdAt: row.created_at,
+    description: row.description,
   }));
 }
 

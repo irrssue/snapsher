@@ -156,7 +156,7 @@ function SignedInApp({
       const { post, nextAllowedAt: allowedAt } = await createPost(input);
       setPosts((current) => [post, ...current]);
       setMyPosts((current) => [
-        { id: post.id, photoUrl: post.photoUrl, createdAt: post.createdAt },
+        { id: post.id, photoUrl: post.photoUrl, createdAt: post.createdAt, description: post.description },
         ...current,
       ]);
       setNextAllowedAt(allowedAt);
@@ -227,7 +227,7 @@ function SignedInApp({
 
             <Countdown nextAllowedAt={nextAllowedAt} clockOffset={clockOffset} />
 
-            <PostGrid posts={myPosts} />
+            <PostGrid posts={myPosts} username={user.username} avatarUrl={user.avatarUrl} />
           </div>
         )}
       </main>

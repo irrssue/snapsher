@@ -110,7 +110,7 @@ export function PublicProfileModal({ userId, onClose }: PublicProfileModalProps)
 
               <span className="text-sm text-neutral-300">{profile.postCount} posts</span>
 
-              <PostGrid posts={posts} />
+              <PostGrid posts={posts} username={profile.username} avatarUrl={profile.avatarUrl} />
             </>
           )}
         </div>

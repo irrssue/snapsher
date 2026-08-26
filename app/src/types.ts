@@ -21,11 +21,13 @@ export type Post = {
   commentCount: number;
 };
 
-/** The minimal shape a profile's post grid needs — no likes, no description. */
+/** The shape a profile's post grid needs — no likes or comment counts. */
 export type PostSummary = {
   id: string;
   photoUrl: string;
   createdAt: number;
+  /** Null when the author shared the photo without a description. */
+  description: string | null;
 };
 
 export type Liker = {
