@@ -137,5 +137,5 @@ usersRouter.get("/:id/posts", (req, res) => {
   const user = getPublicUser(targetId);
   if (!user) return res.status(404).json({ error: "Not found." });
 
-  res.json({ posts: listPostsFor(targetId) });
+  res.json({ posts: listPostsFor(actorOf(req), targetId) });
 });

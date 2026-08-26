@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import type { PostSummary } from "../types";
 import { useBodyScrollLock, useDialogFocus } from "../hooks";
-import { CommentIcon, HeartIcon } from "./icons";
+import { PostInteractions } from "./PostInteractions";
+import { CloseIcon } from "./icons";
 
 type PostPreviewModalProps = {
   post: PostSummary;
@@ -11,11 +12,10 @@ type PostPreviewModalProps = {
 };
 
 /**
- * Read-only view of a single grid photo, opened from `PostGrid`. Mirrors
- * `ComposeModal`'s preview layout on purpose — same photo/description
- * arrangement — but nothing here is editable: no file picker, no textarea,
- * and no posting countdown, since a post already shared has no bearing on
- * when the next one can go out.
+ * A single grid photo, opened from `PostGrid`. Mirrors `PostCard`'s layout —
+ * same avatar/description/like-comment column beside the photo — via the
+ * `PostInteractions` component they both share, so liking, commenting, and the
+ * date all behave exactly as they do on the home feed.
  */
 export function PostPreviewModal({ post, username, avatarUrl, onClose }: PostPreviewModalProps) {
   const dialogRef = useDialogFocus<HTMLDivElement>();
@@ -45,43 +45,29 @@ export function PostPreviewModal({ post, username, avatarUrl, onClose }: PostPre
         onClick={(e) => e.stopPropagation()}
         className="max-h-full w-full max-w-md overflow-y-auto overscroll-contain rounded-3xl bg-neutral-900 p-5 outline-none md:max-w-3xl md:p-8"
       >
-        <div className="flex items-start justify-between">
-          <p className="text-xs uppercase tracking-widest text-neutral-400">Preview</p>
+        <div className="flex items-center justify-end">
           <button
             type="button"
             onClick={onClose}
-            className="-m-2 p-2 text-sm text-neutral-400 transition-colors hover:text-white active:text-white"
+            aria-label="Close"
+            className="-m-2 p-2 text-neutral-400 transition-colors hover:text-white active:text-white"
           >
-            Close
+            <CloseIcon className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="mt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-center md:gap-10">
-          <div className="contents md:flex md:w-64 md:flex-col md:gap-3">
-            <div className="flex items-center gap-2">
-              {avatarUrl ? (
-                <img
-                  src={avatarUrl}
-                  alt=""
-                  className="h-8 w-8 shrink-0 rounded-full object-cover"
-                />
-              ) : (
-                <div className="h-8 w-8 shrink-0 rounded-full bg-neutral-300" />
-              )}
-              <span className="text-sm text-white">@{username}</span>
-            </div>
-
-            {post.description && (
-              <p className="w-full whitespace-pre-line break-words rounded-2xl bg-neutral-800 px-4 py-3 text-sm text-neutral-200">
-                {post.description}
-              </p>
-            )}
-
-            <div className="order-1 flex items-center gap-3 text-white opacity-60 md:order-none">
-              <HeartIcon className="h-6 w-6" />
-              <CommentIcon className="h-6 w-6" />
-            </div>
-          </div>
+        <div className="mt-2 flex flex-col gap-3 md:flex-row md:items-center md:justify-center md:gap-10">
+          <PostInteractions
+            postId={post.id}
+            username={username}
+            avatarUrl={avatarUrl}
+            description={post.description}
+            createdAt={post.createdAt}
+            likedByMe={post.likedByMe}
+            isOwner={post.isOwner}
+            likeCount={post.likeCount}
+            commentCount={post.commentCount}
+          />
 
           <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-3xl bg-neutral-300 md:aspect-auto md:h-[21.6rem] md:w-[21.6rem] md:shrink-0">
             <img src={post.photoUrl} alt="" className="h-full w-full object-cover" />

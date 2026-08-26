@@ -240,6 +240,12 @@ export type PostSummary = {
   photoUrl: string;
   createdAt: number;
   description: string | null;
+  likedByMe: boolean;
+  isOwner: boolean;
+  /** Only ever set when `isOwner` is true — nobody else may learn a post's like count. */
+  likeCount?: number;
+  /** Public, unlike likeCount — anyone who can open the thread can already count it. */
+  commentCount: number;
 };
 
 /**
@@ -247,18 +253,34 @@ export type PostSummary = {
  * count is already public (see `postCountFor`), and this is the same policy
  * applied to the photos themselves: an authenticated member may browse the
  * grid on any profile, same as they can already see its avatar and count.
+ *
+ * The like/comment interactions surfaced alongside each photo stay gated by
+ * `likesStore`/`commentsStore`'s own friend check when actually exercised —
+ * this only decides what's shown, not what's allowed.
  */
-export function listPostsFor(userId: number): PostSummary[] {
+export function listPostsFor(actor: Actor, userId: number): PostSummary[] {
+  assertActor(actor);
   const rows = selectUserPosts.all(userId) as Pick<
     PostRow,
     "id" | "description" | "photo_file" | "created_at"
   >[];
-  return rows.map((row) => ({
-    id: String(row.id),
-    photoUrl: `/uploads/${row.photo_file}`,
-    createdAt: row.created_at,
-    description: row.description,
-  }));
+  const postIds = rows.map((row) => row.id);
+  const stats = likeStatsFor(actor, postIds);
+  const commentCounts = commentCountFor(postIds);
+  const isOwner = userId === actor.userId;
+  return rows.map((row) => {
+    const rowStats = stats.get(row.id);
+    return {
+      id: String(row.id),
+      photoUrl: `/uploads/${row.photo_file}`,
+      createdAt: row.created_at,
+      description: row.description,
+      likedByMe: rowStats?.likedByMe ?? false,
+      isOwner,
+      ...(isOwner ? { likeCount: rowStats?.count ?? 0 } : {}),
+      commentCount: commentCounts.get(row.id) ?? 0,
+    };
+  });
 }
 
 /**

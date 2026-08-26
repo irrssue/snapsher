@@ -26,7 +26,7 @@ export function PostGrid({ posts, username, avatarUrl }: PostGridProps) {
             type="button"
             onClick={() => setPreviewPost(post)}
             aria-label="View photo"
-            className="aspect-square overflow-hidden bg-neutral-800"
+            className="aspect-square cursor-pointer overflow-hidden bg-neutral-800"
           >
             <img
               src={post.photoUrl}
