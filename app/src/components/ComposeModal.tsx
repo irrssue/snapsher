@@ -8,6 +8,7 @@ const MAX_DESCRIPTION_LENGTH = 300;
 
 type ComposeModalProps = {
   username: string;
+  avatarUrl: string | null;
   /** Null when the posting window couldn't be read — treated as "not yet". */
   nextAllowedAt: number | null;
   /**
@@ -22,6 +23,7 @@ type ComposeModalProps = {
 
 export function ComposeModal({
   username,
+  avatarUrl,
   nextAllowedAt,
   clockOffset,
   onClose,
@@ -110,7 +112,15 @@ export function ComposeModal({
         <div className="mt-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-center md:gap-10">
           <div className="contents md:flex md:w-64 md:flex-col md:gap-3">
             <div className="flex items-center gap-2">
-              <div className="h-8 w-8 shrink-0 rounded-full bg-neutral-300" />
+              {avatarUrl ? (
+                <img
+                  src={avatarUrl}
+                  alt=""
+                  className="h-8 w-8 shrink-0 rounded-full object-cover"
+                />
+              ) : (
+                <div className="h-8 w-8 shrink-0 rounded-full bg-neutral-300" />
+              )}
               <span className="text-sm text-white">@{username}</span>
             </div>
 

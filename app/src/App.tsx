@@ -235,6 +235,7 @@ function SignedInApp({
       {composing && (
         <ComposeModal
           username={user.username}
+          avatarUrl={user.avatarUrl}
           nextAllowedAt={nextAllowedAt}
           clockOffset={clockOffset}
           onClose={() => setComposing(false)}
