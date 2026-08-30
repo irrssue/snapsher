@@ -8,18 +8,23 @@ Shipped in commit `df480e7` (pushed to `main`, deployed to the homeserver, PM2 p
 - New server files: `server/src/email.ts` (code gen/hash/send), `server/src/verificationStore.ts` (pending-signup storage).
 - New/changed endpoints: `POST /api/auth/signup` (now sends a code + parks a pending row instead of creating the account), `POST /api/auth/verify-email`, `POST /api/auth/resend-code`.
 - Security review (separate Opus agent) caught and fixed a real hijack bug: a second `/signup` call for someone else's address could overwrite their pending row. Fixed with a possession token returned only to the original caller and required on verify/resend.
-- Dev fallback: with no `RESEND_API_KEY` set, the code is logged to the console instead of emailed — `npm run dev` works with no credentials.
+- Dev fallback: the code is logged to the console instead of emailed when `EMAIL_LOG_CODES=1` is set, which `npm run dev` sets for you — so local dev still needs no credentials. It is deliberately **not** keyed on `NODE_ENV` any more: a homeserver that lost that variable used to claim the send succeeded and print every code to the PM2 log.
 
-## What's NOT done yet — action needed
-**Production sign-up currently 502s.** No `RESEND_API_KEY` is set in the homeserver's PM2 env, so every send fails closed (by design — it never pretends to succeed).
+## Status: done and deployed
 
-To fix, on the homeserver:
-1. Get an API key from your Resend account, and a sender address on a domain verified in Resend (the default `onboarding@resend.dev` only delivers to your own Resend account's address — real users need a verified domain).
-2. Set `RESEND_API_KEY` and `EMAIL_FROM` in the shell before starting PM2.
-3. **Must be `pm2 delete snapsher` + `pm2 start` + `pm2 save`, not `pm2 restart`** — a plain restart preserves the old env and can't add a new key.
-   - Use `--interpreter /home/irrssue/.nvm/versions/node/v22.23.1/bin/node` (a non-interactive ssh shell has no nvm on PATH).
-4. Boot now logs a warning (`[config] RESEND_API_KEY is unset in production...`) if this is still missing — check `pm2 logs snapsher` after restart to confirm it's gone.
+The env vars this file used to list as outstanding are set on the homeserver and
+`pm2 save`d, so they survive a reboot:
 
-## Where to pick this back up
-- Confirm the env vars are set and do a real sign-up end-to-end on snapsher.com.
-- If Resend's domain verification is still pending, sign-up will keep 502ing until it's verified.
+- `RESEND_API_KEY` and `EMAIL_FROM` (`Snapsher <noreply@mail.snapsher.com>`) — production sign-up sends real mail; it no longer 502s.
+- `NODE_ENV=production` — loopback bind, `Secure` `__Host-` cookies, HSTS, `trust proxy`.
+- `PUBLIC_HOST=snapsher.com` — pins the CSRF origin check to a configured host instead of falling back to the request's own `Host` header.
+- `CLIENT_ORIGIN=https://www.snapsher.com` — the site answers on both the apex and `www` with no redirect, so `www` has to be allowed explicitly or every write from it would 403.
+
+Verified after the restart: `POST /api/auth/continue` is accepted with an `Origin`
+of `snapsher.com` and of `www.snapsher.com`, and refused with `origin_rejected`
+from anything else. Boot logs no config warnings.
+
+Remember the deploy constraint if these ever need changing: **`pm2 delete snapsher`
++ `pm2 start` + `pm2 save`, not `pm2 restart`** — a plain restart keeps the old env.
+Start with `--interpreter /home/irrssue/.nvm/versions/node/v22.23.1/bin/node`, since
+a non-interactive ssh shell has no nvm on `PATH`.
