@@ -53,8 +53,15 @@ export const config = {
    * turns `X-Forwarded-For` into a real client IP for rate limiting. Anything
    * arriving from a non-loopback peer is still treated as the client itself,
    * so a spoofed header from the open internet buys nothing.
+   *
+   * `||`, not `??`: an explicitly empty `TRUST_PROXY` used to survive as `""`,
+   * which index.ts reads as "don't set trust proxy at all". Express then
+   * ignores `X-Forwarded-For` entirely and every request through the tunnel
+   * reads as 127.0.0.1 — one shared bucket in all twelve limiters, and a
+   * sign-in lockout key of `email|127.0.0.1` that any stranger can trip on any
+   * account's behalf. An empty value now falls back to the safe default.
    */
-  trustProxy: process.env.TRUST_PROXY ?? (isProd ? "loopback" : ""),
+  trustProxy: process.env.TRUST_PROXY || (isProd ? "loopback" : ""),
 
   clientOrigins,
 
@@ -160,11 +167,17 @@ export const config = {
     perIp: { maxFailures: 5, windowMs: 15 * MINUTE, lockMs: 15 * MINUTE },
     perAccount: { maxFailures: 50, windowMs: HOUR, lockMs: HOUR },
     /**
-     * Keyed on the source address alone, unlike the two locks above. It has to
-     * be: a pending sign-up already destroys itself after `verification.maxAttempts`
-     * wrong codes (see verificationStore.ts), so the only thing left to catch
-     * here is restarting sign-up to buy a fresh batch of guesses — and that
-     * loop walks across addresses, not within one.
+     * Wrong verification codes. A pending sign-up already destroys itself after
+     * `verification.maxAttempts` wrong codes (see verificationStore.ts), so the
+     * only thing left to catch here is restarting sign-up to buy a fresh batch
+     * of guesses — a loop that resets every counter living in the database,
+     * because it replaces the row those counters are on.
+     *
+     * auth.ts therefore applies this one shape twice: once keyed on the source
+     * address, and once on the address being verified. The first counts the
+     * loop run from one source across many addresses; the second counts it run
+     * from many sources against one address, which is the case that actually
+     * ends with somebody else's email bound to an attacker's account.
      *
      * Deliberately lower than `rateLimits.verifyEmail`'s 20/15min: that limiter
      * counts every request, this counts only failures, so failures alone can
@@ -173,6 +186,17 @@ export const config = {
      * layer. Arming at 8 makes it the one that actually bites.
      */
     verifyCode: { maxFailures: 8, windowMs: 15 * MINUTE, lockMs: 30 * MINUTE },
+    /**
+     * Outbound verification mail, keyed on the destination address rather than
+     * the caller, because `/signup` is unauthenticated and names its own
+     * recipient. Four an hour is what `verification.maxResends` already intends
+     * per pending sign-up (one send plus three resends); the difference is that
+     * this counter isn't reset by destroying the row, so it still holds when
+     * one address is signed up for over and over from rotating sources. What it
+     * protects is a stranger's inbox and the sending domain's reputation —
+     * spam complaints against that domain take real sign-ups down with them.
+     */
+    verificationSend: { maxFailures: 4, windowMs: HOUR, lockMs: HOUR },
   },
 
   /**
@@ -193,12 +217,27 @@ export const config = {
      */
     from: process.env.EMAIL_FROM?.trim() || "Snapsher <onboarding@resend.dev>",
     sendTimeoutMs: envInt("EMAIL_SEND_TIMEOUT_MS", 10_000),
+    /**
+     * Print verification codes to the console instead of sending them, for
+     * development with no Resend key. Set in the `dev` npm script and nowhere
+     * else — deliberately *not* derived from `isProd` like everything else
+     * here.
+     *
+     * Every other control in the app fails safe when `NODE_ENV` goes missing
+     * (no HTML is served at all, and the boot banner shouts). This one would
+     * fail open: the process would tell every signer-upper a code was on its
+     * way while writing it in plaintext to `pm2 logs`, where log access, a
+     * shipper, or a backup is enough to complete anyone's sign-up. Requiring
+     * its own opt-in means a homeserver that loses its environment refuses
+     * sign-ups instead of leaking codes.
+     */
+    logCodes: envFlag("EMAIL_LOG_CODES", false),
   },
 
   verification: {
     /** Long enough to switch to a mail app and back; short enough that a code lifted from a backup is stale before it's worth anything. */
     codeTtlMs: envInt("VERIFICATION_CODE_TTL_MS", 10 * MINUTE),
-    /** The number that actually bounds guessing a 4-digit code — see the arithmetic in verificationStore.ts. Exhausting it destroys the pending sign-up rather than locking it, so the only person it can inconvenience just re-runs one form. */
+    /** Guesses allowed against one pending row. Exhausting it destroys the pending sign-up rather than locking it, so the only person it can inconvenience just re-runs one form — which is also why it can't be the thing that bounds guessing on its own, and why `lockout.verifyCode` is keyed on the address as well. */
     maxAttempts: envInt("VERIFICATION_MAX_ATTEMPTS", 5),
     /** Four emails per pending sign-up, total. */
     maxResends: envInt("VERIFICATION_MAX_RESENDS", 3),
@@ -223,6 +262,22 @@ if (isProd && !config.cookieSecure) {
 if (isProd && !config.email.resendApiKey) {
   console.warn(
     "[config] RESEND_API_KEY is unset in production — sign-up verification emails cannot be sent.",
+  );
+}
+
+/**
+ * Unset, the origin check in security.ts falls back to comparing the request's
+ * `Origin` against its own `Host` — two headers written by the same sender.
+ * A browser won't let script forge `Host`, which is what keeps that from being
+ * exploitable today, but it is the only CSRF defence in front of sign-in and
+ * sign-up (no session yet, so no token to demand) and it rests entirely on the
+ * tunnel not rewriting `Host`. Warned about rather than enforced for the same
+ * reason as the fallback exists: an unset value must degrade, not lock everyone
+ * out.
+ */
+if (isProd && !config.publicHost) {
+  console.warn(
+    "[config] PUBLIC_HOST is unset in production — the origin check falls back to the Host header, which the sender also controls.",
   );
 }
 

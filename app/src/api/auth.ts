@@ -27,7 +27,7 @@ export async function continueWithCredentials(
  * — a device clock that disagrees with the server's can't throw a countdown
  * off. `token` proves to `verifyEmail`/`resendCode` that this caller is the
  * one who just started (or restarted) this particular sign-up; it's never
- * shown to the user and isn't the 4-digit code.
+ * shown to the user and isn't the 6-digit code.
  */
 export type SignupPending = { pending: true; token: string; resendInMs: number; expiresInMs: number };
 

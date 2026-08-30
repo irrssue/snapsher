@@ -9,6 +9,38 @@ import type { Request, RequestHandler, Response } from "express";
 
 type Window = { count: number; resetAt: number };
 
+/**
+ * Ceiling on how many keys any one limiter or lockout may hold.
+ *
+ * The sweeper below only sheds entries that have already expired, so between
+ * sweeps a store grows one entry per distinct key and holds it for the whole
+ * window — 15 minutes to an hour. Keys are partly attacker-chosen: a source
+ * address (a single IPv6 /64 is 2^64 of them) and, for the sign-in lockout, an
+ * email. Unbounded, that is a slow memory-exhaustion DoS whose successful
+ * outcome is an OOM restart, and a restart silently clears *every* brute-force
+ * counter in the process — the attacker is paid twice.
+ *
+ * 50,000 is far above any real member base's working set, so eviction only ever
+ * happens under an attack of exactly that shape.
+ */
+const MAX_KEYS = 50_000;
+
+/**
+ * `store.set` with the cap enforced. Map iterates in insertion order, so the
+ * first key is the oldest — evicting it under pressure discards the entry
+ * closest to expiring anyway. An attacker filling the map can evict their own
+ * accumulated failures, but that costs them 50,000 requests through the very
+ * limiters they are trying to shed, which is a worse deal than waiting out the
+ * window.
+ */
+function remember<T>(store: Map<string, T>, key: string, value: T) {
+  if (store.size >= MAX_KEYS && !store.has(key)) {
+    const oldest = store.keys().next().value;
+    if (oldest !== undefined) store.delete(oldest);
+  }
+  store.set(key, value);
+}
+
 function sweep(store: Map<string, { resetAt: number }>) {
   const timer = setInterval(() => {
     const now = Date.now();
@@ -61,7 +93,7 @@ export function rateLimit({
     const entry = store.get(key);
 
     if (!entry || entry.resetAt <= now) {
-      store.set(key, { count: 1, resetAt: now + windowMs });
+      remember(store, key, { count: 1, resetAt: now + windowMs });
       return next();
     }
 
@@ -102,7 +134,7 @@ export function createLockout({
       const entry = store.get(id);
 
       if (!entry || entry.resetAt <= now) {
-        store.set(id, { failures: 1, resetAt: now + windowMs, lockedUntil: 0 });
+        remember(store, id, { failures: 1, resetAt: now + windowMs, lockedUntil: 0 });
         return;
       }
 

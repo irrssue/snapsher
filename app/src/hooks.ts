@@ -1,6 +1,19 @@
 import { useEffect, useRef } from "react";
 
 /**
+ * How many mounted modals currently want the page frozen, and the value to put
+ * back when the last of them goes away. Module scope, not per-hook state:
+ * modals stack (a grid photo opens over a public profile, a profile opens over
+ * the friends popup), and a per-instance snapshot of `body.style.overflow`
+ * would capture `"hidden"` — the value the modal underneath had already
+ * written. React unmounts a deleted subtree's effects parent-first, so the
+ * outer modal restored `""` and the inner one then wrote `"hidden"` back over
+ * it, leaving the whole app unscrollable with nothing on screen to explain why.
+ */
+let scrollLockCount = 0;
+let previousBodyOverflow = "";
+
+/**
  * Freezes the page behind a modal for as long as it is mounted. Without it a
  * drag anywhere on the backdrop scrolls the feed underneath, so dismissing the
  * modal hands back a different scroll position than it was opened from.
@@ -10,10 +23,12 @@ import { useEffect, useRef } from "react";
  */
 export function useBodyScrollLock() {
   useEffect(() => {
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    if (scrollLockCount++ === 0) {
+      previousBodyOverflow = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+    }
     return () => {
-      document.body.style.overflow = previous;
+      if (--scrollLockCount === 0) document.body.style.overflow = previousBodyOverflow;
     };
   }, []);
 }

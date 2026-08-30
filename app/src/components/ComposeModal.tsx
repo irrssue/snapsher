@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { readPhotoAsDataUrl } from "../api/posts";
 import { useBodyScrollLock, useDialogFocus } from "../hooks";
 import { formatRemaining, useNow } from "../time";
@@ -41,14 +41,6 @@ export function ComposeModal({
   useBodyScrollLock();
 
   const hasDraft = photo !== null || description.trim() !== "";
-
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape" && !sharing) onClose();
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose, sharing]);
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -93,6 +85,18 @@ export function ComposeModal({
         aria-label="Share a photo"
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
+        // Escape is handled on the dialog rather than on `window`. Every modal
+        // used to register its own `window` listener, so one keypress ran all
+        // of them and dismissed the entire stack at once. `useDialogFocus`
+        // puts focus inside this node on open, so the keydown arrives here;
+        // `stopPropagation` then keeps a nested dialog's Escape from reaching
+        // the dialog wrapped around it — the same scoping the backdrop click
+        // above already relies on, so pointer and keyboard finally agree.
+        onKeyDown={(e) => {
+          if (e.key !== "Escape" || sharing) return;
+          e.stopPropagation();
+          onClose();
+        }}
         className="max-h-full w-full max-w-md overflow-y-auto overscroll-contain rounded-3xl bg-neutral-900 p-5 outline-none md:max-w-3xl md:p-8"
       >
         <div className="flex items-start justify-between">
@@ -130,7 +134,7 @@ export function ComposeModal({
               maxLength={MAX_DESCRIPTION_LENGTH}
               rows={3}
               placeholder="Enter a description here"
-              className="w-full resize-none rounded-2xl bg-neutral-800 px-4 py-3 text-sm text-neutral-200 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-white/60"
+              className="w-full resize-none rounded-2xl bg-neutral-800 px-4 py-3 text-sm text-neutral-200 placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-white/60"
             />
 
             <div className="order-1 flex items-center gap-3 text-white opacity-60 md:order-none">
@@ -152,7 +156,7 @@ export function ComposeModal({
                 className="h-full w-full object-cover"
               />
             ) : (
-              <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-black transition-transform group-hover:scale-105 group-active:scale-95">
+              <span className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-black transition-transform group-hover:scale-105 group-active:scale-95">
                 <PlusIcon className="h-5 w-5" />
               </span>
             )}

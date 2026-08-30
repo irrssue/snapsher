@@ -115,7 +115,7 @@ export function AuthPage({
           <button
             type="submit"
             disabled={submitting}
-            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-50"
+            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-40"
           >
             {submitting ? "Please wait…" : "Continue"}
           </button>
@@ -157,7 +157,7 @@ export function AuthPage({
           <button
             type="submit"
             disabled={submitting}
-            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-50"
+            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-40"
           >
             {submitting ? "Please wait…" : "Sign up"}
           </button>
@@ -180,25 +180,29 @@ export function AuthPage({
           className="flex w-full max-w-xs flex-col items-center gap-3"
         >
           <p className="break-words text-center text-xs text-neutral-400">
-            Enter the 4-digit code we sent to <span className="text-white">{email}</span>.
+            Enter the 6-digit code we sent to <span className="text-white">{email}</span>.
           </p>
           <AuthInput
             type="text"
             name="code"
             inputMode="numeric"
             pattern="[0-9]*"
-            placeholder="4-digit code"
+            placeholder="6-digit code"
             aria-label="Verification code"
             // What makes iOS/Android offer the code straight from the
-            // notification banner — four separate boxes would defeat this.
+            // notification banner — six separate boxes would defeat this.
             autoComplete="one-time-code"
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
             enterKeyHint="go"
             required
-            minLength={4}
-            maxLength={4}
+            // Mirrors the server's `CODE_RE` in auth.ts. The code is six
+            // digits, not four, because the attempt caps that bound guessing it
+            // are reset by restarting sign-up — the size of the code space is
+            // what actually holds.
+            minLength={6}
+            maxLength={6}
           />
 
           {error && <p className="text-center text-xs text-red-400">{error}</p>}
@@ -206,7 +210,7 @@ export function AuthPage({
           <button
             type="submit"
             disabled={submitting}
-            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-50"
+            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-40"
           >
             {submitting ? "Please wait…" : "Verify"}
           </button>
@@ -214,7 +218,7 @@ export function AuthPage({
             type="button"
             onClick={onResendCode}
             disabled={resendSecondsLeft > 0 || resendSubmitting}
-            className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white disabled:opacity-50"
+            className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white disabled:opacity-40"
           >
             {resendSecondsLeft > 0 ? `Resend code in ${resendSecondsLeft}s` : "Resend code"}
           </button>

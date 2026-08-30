@@ -10,13 +10,27 @@ const JPEG_QUALITY = 0.9;
 const MAX_ZOOM_MULTIPLIER = 3;
 
 /**
- * The square has to fit between the backdrop's `px-4` and the dialog's `p-6`,
- * which is 80px of the window's width. A fixed 288 spilled out of the rounded
- * modal on anything narrower than ~368px — 48px of overflow on a 320px phone —
+ * The square has to fit between the backdrop's `px-4` and the dialog's `p-5`,
+ * which is 72px of the window's width. A fixed 288 spilled out of the rounded
+ * modal on anything narrower than ~360px — 40px of overflow on a 320px phone —
  * and, with nothing clipping the document, scrolled the whole page sideways.
+ *
+ * Height needs the same treatment. Sizing from width alone put a 288px square
+ * inside a `max-h-full` dialog only 327px tall on a 667×375 landscape phone,
+ * which pushed the zoom slider and both action buttons ~150px below the fold —
+ * and the square is `touch-none`, so dragging inside it pans the photo instead
+ * of scrolling down to them. `CHROME_HEIGHT` is everything stacked above and
+ * below the square: the backdrop's `py-6` (48) plus, inside the dialog, `p-5`
+ * (40), the "Drag to reposition" label (16), three `gap-5` gaps (60), the zoom
+ * slider (20) and the 44px button row.
  */
+const CHROME_HEIGHT = 48 + 40 + 16 + 60 + 20 + 44;
+
 function measureViewport() {
-  return Math.max(160, Math.min(MAX_VIEWPORT, window.innerWidth - 32 - 48));
+  return Math.max(
+    160,
+    Math.min(MAX_VIEWPORT, window.innerWidth - 32 - 40, window.innerHeight - CHROME_HEIGHT),
+  );
 }
 
 type Frame = { left: number; top: number; scale: number };
@@ -126,18 +140,25 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
     if (imgRef.current?.complete) handleImageLoad();
   }, [handleImageLoad]);
 
-  useEffect(() => {
-    window.addEventListener("resize", fitToWindow);
-    return () => window.removeEventListener("resize", fitToWindow);
-  }, [fitToWindow]);
+  // Deliberately `frame !== null` and not `frame` itself: the guard below only
+  // asks whether there is a crop worth preserving, and depending on the object
+  // would resubscribe the listener on every pointer move of a drag.
+  const hasFrame = frame !== null;
 
   useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape" && !exporting) onCancel();
+    // `fitToWindow` always re-centres and re-scales, so firing it on a resize
+    // that leaves the square exactly the size it already is threw away a crop
+    // the user had positioned, for nothing visible in return — every desktop
+    // window drag on the height axis, and every Android Chrome URL-bar
+    // collapse, used to do this. Now that `measureViewport` reads the height
+    // too, a resize that genuinely changes the box still refits.
+    function onResize() {
+      if (hasFrame && measureViewport() === viewport) return;
+      fitToWindow();
     }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onCancel, exporting]);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [fitToWindow, hasFrame, viewport]);
 
   function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
     if (!frame) return;
@@ -263,7 +284,19 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
         aria-modal="true"
         aria-label="Position your profile photo"
         tabIndex={-1}
-        className="flex max-h-full w-full max-w-sm flex-col items-center gap-5 overflow-y-auto overscroll-contain rounded-3xl bg-neutral-900 p-6 outline-none"
+        // Escape is handled on the dialog rather than on `window`. Every modal
+        // used to register its own `window` listener, so one keypress ran all
+        // of them and dismissed the entire stack at once. `useDialogFocus`
+        // puts focus inside this node on open, so the keydown arrives here;
+        // `stopPropagation` then keeps a nested dialog's Escape from reaching
+        // the dialog wrapped around it — the same scoping the backdrop click
+        // above already relies on, so pointer and keyboard finally agree.
+        onKeyDown={(e) => {
+          if (e.key !== "Escape" || exporting) return;
+          e.stopPropagation();
+          onCancel();
+        }}
+        className="flex max-h-full w-full max-w-sm flex-col items-center gap-5 overflow-y-auto overscroll-contain rounded-3xl bg-neutral-900 p-5 outline-none"
       >
         <p className="shrink-0 text-xs uppercase tracking-widest text-neutral-400">
           Drag to reposition

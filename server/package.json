@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "EMAIL_LOG_CODES=1 tsx watch src/index.ts",
     "build": "tsc -b",
     "start": "node dist/index.js"
   },

@@ -26,14 +26,6 @@ export function PublicProfileModal({ userId, onClose }: PublicProfileModalProps)
   useBodyScrollLock();
 
   useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
-  useEffect(() => {
     let active = true;
     setProfile(null);
     setPosts([]);
@@ -61,7 +53,7 @@ export function PublicProfileModal({ userId, onClose }: PublicProfileModalProps)
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-6"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-6 md:px-6 md:py-10"
       onClick={onClose}
       role="presentation"
     >
@@ -72,24 +64,44 @@ export function PublicProfileModal({ userId, onClose }: PublicProfileModalProps)
         aria-label="Profile"
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[85vh] w-full max-w-sm flex-col overflow-y-auto rounded-3xl bg-neutral-900 p-5 outline-none"
+        // Escape is handled on the dialog rather than on `window`. Every modal
+        // used to register its own `window` listener, so one keypress ran all
+        // of them and dismissed the entire stack at once. `useDialogFocus`
+        // puts focus inside this node on open, so the keydown arrives here;
+        // `stopPropagation` then keeps a nested dialog's Escape from reaching
+        // the dialog wrapped around it — the same scoping the backdrop click
+        // above already relies on, so pointer and keyboard finally agree.
+        onKeyDown={(e) => {
+          if (e.key !== "Escape") return;
+          e.stopPropagation();
+          onClose();
+        }}
+        className="flex max-h-full w-full max-w-sm flex-col overflow-y-auto overscroll-contain rounded-3xl bg-neutral-900 p-5 outline-none"
       >
         <div className="flex shrink-0 items-center justify-end">
           <button
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="-m-2 p-2 text-neutral-400 transition-colors hover:text-white active:text-white"
+            className="-m-3.5 p-3.5 text-neutral-400 transition-colors hover:text-white active:text-white"
           >
             <CloseIcon className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="flex flex-col items-center gap-4 px-4 pb-4">
+        <div className="flex flex-col items-center gap-4 pb-4">
           {error ? (
             <p className="py-8 text-center text-sm text-red-400">{error}</p>
           ) : !profile ? (
-            <div className="h-24 w-24 shrink-0 animate-pulse rounded-full bg-neutral-800" />
+            // The skeleton stands in for the avatar *and* the two text rows below
+            // it. With only the circle the dialog was ~190px tall, and because the
+            // backdrop centres it, the profile landing grew it in both directions
+            // and slid the avatar upward out from under the pointer.
+            <>
+              <div className="h-24 w-24 shrink-0 animate-pulse rounded-full bg-neutral-800" />
+              <div className="h-6 w-32 animate-pulse rounded-full bg-neutral-800" />
+              <div className="h-5 w-20 animate-pulse rounded-full bg-neutral-800" />
+            </>
           ) : (
             <>
               <span className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-300">

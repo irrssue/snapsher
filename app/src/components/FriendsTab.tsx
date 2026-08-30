@@ -139,7 +139,7 @@ export function FriendsTab({ onFriendsChanged, onViewProfile }: FriendsTabProps)
         <button
           type="button"
           onClick={() => setSubTab("add")}
-          className={`rounded-full px-4 py-2 text-xs transition-colors ${
+          className={`rounded-full px-4 py-3 text-xs transition-colors ${
             subTab === "add"
               ? "bg-neutral-200 text-black"
               : "text-neutral-300 hover:text-white active:text-white"
@@ -150,7 +150,7 @@ export function FriendsTab({ onFriendsChanged, onViewProfile }: FriendsTabProps)
         <button
           type="button"
           onClick={() => setSubTab("requests")}
-          className={`flex items-center gap-1.5 rounded-full px-4 py-2 text-xs transition-colors ${
+          className={`flex items-center gap-1.5 rounded-full px-4 py-3 text-xs transition-colors ${
             subTab === "requests"
               ? "bg-neutral-200 text-black"
               : "text-neutral-300 hover:text-white active:text-white"
@@ -194,7 +194,7 @@ export function FriendsTab({ onFriendsChanged, onViewProfile }: FriendsTabProps)
               maxLength={30}
               placeholder="Search all users"
               aria-label="Search all users"
-              className="w-full rounded-full bg-neutral-800 py-2 pl-10 pr-4 text-sm text-white placeholder:text-neutral-400 focus:outline-none focus:ring-1 focus:ring-neutral-500"
+              className="w-full rounded-full bg-neutral-800 py-2 pl-10 pr-4 text-sm text-white placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-white/60"
             />
           </label>
 
@@ -214,7 +214,7 @@ export function FriendsTab({ onFriendsChanged, onViewProfile }: FriendsTabProps)
                       type="button"
                       disabled={disabled}
                       onClick={() => handleSendFriendRequest(discoverableUser.id)}
-                      className={`shrink-0 rounded-full px-4 py-2.5 text-xs transition-colors ${
+                      className={`shrink-0 rounded-full px-4 py-2.5 text-xs transition-opacity ${
                         disabled
                           ? "bg-neutral-900 text-neutral-500"
                           : "bg-white text-black hover:opacity-90 active:opacity-70"
@@ -245,18 +245,23 @@ export function FriendsTab({ onFriendsChanged, onViewProfile }: FriendsTabProps)
               username={request.username}
               onClick={() => onViewProfile(request.userId)}
               action={
-                <div className="flex shrink-0 items-center gap-2">
+                <div
+                  // `px-3`/`gap-1.5`, not `px-4`/`gap-2`: this group is `shrink-0`, so
+                  // its width comes straight off the truncating username beside it —
+                  // at 320px the old sizing left about six characters of the name.
+                  className="flex shrink-0 items-center gap-1.5"
+                >
                   <button
                     type="button"
                     onClick={() => handleDeclineRequest(request)}
-                    className="rounded-full bg-neutral-800 px-4 py-2.5 text-xs text-neutral-300 transition-colors hover:text-white active:text-white"
+                    className="rounded-full bg-neutral-800 px-3 py-2.5 text-xs text-neutral-300 transition-colors hover:text-white active:text-white"
                   >
                     Decline
                   </button>
                   <button
                     type="button"
                     onClick={() => handleAcceptRequest(request)}
-                    className="rounded-full bg-white px-4 py-2.5 text-xs text-black transition-colors hover:opacity-90 active:opacity-70"
+                    className="rounded-full bg-white px-3 py-2.5 text-xs text-black transition-opacity hover:opacity-90 active:opacity-70"
                   >
                     Accept
                   </button>
@@ -286,8 +291,12 @@ export function PersonRow({
   /** Opens that person's public profile. Omitted where there's nothing to open. */
   onClick?: () => void;
 }) {
+  // `neutral-800`, not `neutral-900`: this row is also rendered inside
+  // `FriendsListPopup`, whose dialog is itself `bg-neutral-900` — the old
+  // highlight was exactly the background there, so hover and press showed
+  // nothing at all. Matches the row highlight in `SettingsModal`.
   return (
-    <div className="flex items-center gap-3 rounded-2xl px-2 py-2.5 transition-colors hover:bg-neutral-900 active:bg-neutral-900">
+    <div className="flex items-center gap-3 rounded-2xl px-2 py-2.5 transition-colors hover:bg-neutral-800 active:bg-neutral-800">
       <button
         type="button"
         onClick={onClick}

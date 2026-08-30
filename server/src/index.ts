@@ -20,6 +20,31 @@ if (config.trustProxy) app.set("trust proxy", config.trustProxy);
 
 app.use(securityHeaders);
 
+/**
+ * One-shot check that the tunnel is actually forwarding a client address.
+ *
+ * `trust proxy = loopback` is what turns `X-Forwarded-For` into a real client
+ * IP; if the header ever stops arriving, `req.ip` reads 127.0.0.1 for *every*
+ * request and the failure is completely silent. The consequences are not: one
+ * caller exhausts the global API budget for the whole site, and five failed
+ * sign-ins against any known address lock that account for everyone — the
+ * remote denial of service config.ts's lockout notes reason so carefully to
+ * avoid. Logged rather than enforced, since refusing traffic over a missing
+ * header would turn a degraded rate limiter into an outage.
+ */
+let forwardingChecked = false;
+app.use((req, _res, next) => {
+  if (!forwardingChecked && config.isProd) {
+    forwardingChecked = true;
+    if (!req.get("x-forwarded-for")) {
+      console.error(
+        "!!  [config] No X-Forwarded-For on the first request — every client is sharing one rate-limit key.",
+      );
+    }
+  }
+  next();
+});
+
 // Production serves the SPA from this same origin, so CORS only has work to do
 // when a separate dev origin is configured.
 if (config.clientOrigins.length > 0) {
@@ -88,6 +113,28 @@ if (config.isProd) {
 }
 
 app.use(errorHandler);
+
+/**
+ * Every async route handler is wrapped in `asyncRoute`, so a rejected promise
+ * inside a request becomes a 500. Nothing covers what runs *outside* the
+ * request path: the two sweeper timers, and the `fs.promises` calls that
+ * continue after a response is sent. On Node 22 an unhandled rejection
+ * terminates the process by default.
+ *
+ * Logging without exiting is the right trade here for the reason security.ts
+ * already gives about routes: every rate limiter, every lockout and all the
+ * sign-in brute-force protection lives in memory, so a crash is a free reset of
+ * all of it — and an attacker who can provoke one on demand (filling the disk
+ * until a photo write throws, say) clears their own accumulated lockouts every
+ * time. A process left running with one failed background task is a smaller
+ * problem than a process that restarts on request.
+ */
+process.on("unhandledRejection", (reason) => {
+  console.error("[fatal] unhandled rejection", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[fatal] uncaught exception", err);
+});
 
 startSessionSweeper();
 startPendingSignupSweeper();

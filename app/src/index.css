@@ -6,6 +6,13 @@ body,
   height: 100%;
   margin: 0;
   background: #0c1014;
+  /* The app is dark-only — this isn't a theme, it just tells the UA which one
+     it is already painting. Without it Chrome/Edge/Firefox draw a light
+     scrollbar in the gutter reserved below, WebKit draws a near-black
+     `::-webkit-search-cancel-button` on the two `bg-neutral-800` search fields
+     and a light unfilled track on the crop modal's range input, and Safari
+     styles the delete-account password field for a light page. */
+  color-scheme: dark;
 }
 
 /* The home feed is often tall enough to need a vertical scrollbar while
@@ -63,6 +70,23 @@ button,
   touch-action: manipulation;
   -webkit-user-select: none;
   user-select: none;
+}
+
+/* macOS/iOS "Reduce Motion", Windows "Show animations off" and GNOME reduced
+   motion all ask for this, and Tailwind v4 honours none of it automatically —
+   it only ships a `motion-reduce:` variant that would have to be repeated on
+   every animated utility. Stated once here so it covers the pulsing skeleton,
+   the comment spinner and every `hover:scale-105` button, present and future.
+   Not `0s`: a zero duration skips `transitionend`/`animationend`, and code
+   that waits on those would stall. Unlayered, so it wins over the utilities. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* Nothing in the app drew a keyboard focus state and several controls cleared

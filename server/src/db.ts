@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -6,9 +7,33 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Overridable so a test run can point at a throwaway file instead of the
 // database the homeserver is actually serving from.
-export const db = new Database(process.env.DB_FILE || path.join(__dirname, "..", "data.db"));
+const dbFile = process.env.DB_FILE || path.join(__dirname, "..", "data.db");
+export const db = new Database(dbFile);
 
 db.pragma("journal_mode = WAL");
+
+/**
+ * SQLite creates these 0644 by default, which left every local account and
+ * every unrelated process on the homeserver able to read the bcrypt password
+ * hashes, every email address, the session table, and `pending_signups` —
+ * which holds password hashes for accounts that don't exist yet. Session ids
+ * are stored as SHA-256 so they can't be replayed, but the hashes can be
+ * attacked offline and the address list is directly useful.
+ *
+ * Applied in code rather than by hand so it also holds on the homeserver, after
+ * a fresh checkout, and on whatever the file is copied into — the mode is what
+ * a backup carries with it. Run after `journal_mode = WAL` so the `-wal` and
+ * `-shm` files exist by now; a missing one is not an error, since WAL recreates
+ * them with the database's own mode.
+ */
+for (const suffix of ["", "-wal", "-shm"]) {
+  try {
+    fs.chmodSync(dbFile + suffix, 0o600);
+  } catch {
+    // Not present yet, or not ours to chmod. Neither is worth refusing to boot.
+  }
+}
+
 // SQLite ignores REFERENCES clauses unless this is on, which quietly made every
 // `ON DELETE CASCADE` below a no-op.
 db.pragma("foreign_keys = ON");
@@ -136,10 +161,11 @@ db.exec(`
  * `code_hash` is a SHA-256 of the code, on the same reasoning as
  * `sessions.id`: a row that leaks — through a backup, a log line, a stray
  * `SELECT *` — must not hand out a working code by itself. Honest about what
- * that buys, though: 10,000 codes is a space anyone holding the row can walk
- * offline in milliseconds, so the hash defends against the row being *seen*,
- * not against it being *attacked*. What actually bounds guessing is
- * `expires_at` and `attempts`, enforced in auth.ts.
+ * that buys, though: a million codes is still a space anyone holding the row
+ * can walk offline in milliseconds, so the hash defends against the row being
+ * *seen*, not against it being *attacked*. What actually bounds guessing over
+ * the network is `expires_at`, `attempts`, and the address-keyed lockout in
+ * auth.ts that outlives this row.
  *
  * `token_hash` is a second, unrelated secret: a hash of an opaque token
  * `/signup` hands back only to the caller who made that request. Since the

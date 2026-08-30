@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { CloseIcon, SearchIcon } from "./icons";
 import { PersonRow } from "./FriendsTab";
 import { useBodyScrollLock, useDialogFocus } from "../hooks";
@@ -24,21 +24,13 @@ export function FriendsListPopup({
 
   useBodyScrollLock();
 
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
   const filtered = friends.filter((f) =>
     f.username.toLowerCase().includes(query.trim().toLowerCase()),
   );
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-6"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-6 md:px-6 md:py-10"
       onClick={onClose}
       role="presentation"
     >
@@ -49,7 +41,19 @@ export function FriendsListPopup({
         aria-label="Friends"
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[30rem] w-full max-w-sm flex-col overflow-hidden rounded-3xl bg-neutral-900 p-5 outline-none"
+        // Escape is handled on the dialog rather than on `window`. Every modal
+        // used to register its own `window` listener, so one keypress ran all
+        // of them and dismissed the entire stack at once. `useDialogFocus`
+        // puts focus inside this node on open, so the keydown arrives here;
+        // `stopPropagation` then keeps a nested dialog's Escape from reaching
+        // the dialog wrapped around it — the same scoping the backdrop click
+        // above already relies on, so pointer and keyboard finally agree.
+        onKeyDown={(e) => {
+          if (e.key !== "Escape") return;
+          e.stopPropagation();
+          onClose();
+        }}
+        className="flex max-h-[min(30rem,100%)] w-full max-w-sm flex-col overflow-hidden rounded-3xl bg-neutral-900 p-5 outline-none"
       >
         <div className="flex shrink-0 items-center justify-between">
           <h2 className="text-sm font-medium text-white">Friends</h2>
@@ -57,7 +61,7 @@ export function FriendsListPopup({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="-m-2 p-2 text-neutral-400 transition-colors hover:text-white active:text-white"
+            className="-m-3.5 p-3.5 text-neutral-400 transition-colors hover:text-white active:text-white"
           >
             <CloseIcon className="h-4 w-4" />
           </button>
@@ -84,7 +88,7 @@ export function FriendsListPopup({
             maxLength={30}
             placeholder="Search your friends"
             aria-label="Search your friends"
-            className="w-full rounded-full bg-neutral-800 py-2 pl-10 pr-4 text-sm text-white placeholder:text-neutral-400 focus:outline-none focus:ring-1 focus:ring-neutral-500"
+            className="w-full rounded-full bg-neutral-800 py-2 pl-10 pr-4 text-sm text-white placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-white/60"
           />
         </label>
 

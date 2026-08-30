@@ -115,8 +115,16 @@ usersRouter.get("/search", rateLimit(config.rateLimits.userSearch), (req, res) =
  * Public profile: whoever is signed in may look up anyone by id. The
  * response deliberately omits friend count and friend status — per
  * `about.md`, only the account owner ever sees their own friend count.
+ *
+ * Ids are sequential, so with only the global 600/15min API budget in front of
+ * it this route answers a `seq 1 5000` loop with the entire member roster —
+ * username, avatar and post count for everyone — from one fresh account. It
+ * gets the search limiter for that reason: 120 profile lookups per 15 minutes
+ * is far more than opening profiles takes and far less than a directory walk.
+ * A separate `rateLimit(...)` call means it counts in its own store rather than
+ * eating the search budget.
  */
-usersRouter.get("/:id", (req, res) => {
+usersRouter.get("/:id", rateLimit(config.rateLimits.userSearch), (req, res) => {
   const targetId = parseId(req.params.id);
   if (targetId === null) return res.status(404).json({ error: "Not found." });
 

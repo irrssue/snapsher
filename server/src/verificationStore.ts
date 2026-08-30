@@ -31,7 +31,7 @@ const recordResendStmt = db.prepare(`
 const deleteExpiredStmt = db.prepare("DELETE FROM pending_signups WHERE expires_at <= ?");
 
 /**
- * Opaque, unrelated to the 4-digit code the user types: this is a possession
+ * Opaque, unrelated to the 6-digit code the user types: this is a possession
  * proof for the *row*, handed back only in `/signup`'s own response and never
  * shown to the user or emailed anywhere. `/verify-email` and `/resend-code`
  * require it precisely so a second, unrelated caller who re-runs `/signup`

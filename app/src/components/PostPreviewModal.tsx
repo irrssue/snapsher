@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import type { PostSummary } from "../types";
 import { useBodyScrollLock, useDialogFocus } from "../hooks";
 import { PostInteractions } from "./PostInteractions";
@@ -22,14 +21,6 @@ export function PostPreviewModal({ post, username, avatarUrl, onClose }: PostPre
 
   useBodyScrollLock();
 
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-6 md:px-6 md:py-10"
@@ -43,6 +34,18 @@ export function PostPreviewModal({ post, username, avatarUrl, onClose }: PostPre
         aria-label="Photo"
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
+        // Escape is handled on the dialog rather than on `window`. Every modal
+        // used to register its own `window` listener, so one keypress ran all
+        // of them and dismissed the entire stack at once. `useDialogFocus`
+        // puts focus inside this node on open, so the keydown arrives here;
+        // `stopPropagation` then keeps a nested dialog's Escape from reaching
+        // the dialog wrapped around it — the same scoping the backdrop click
+        // above already relies on, so pointer and keyboard finally agree.
+        onKeyDown={(e) => {
+          if (e.key !== "Escape") return;
+          e.stopPropagation();
+          onClose();
+        }}
         className="max-h-full w-full max-w-md overflow-y-auto overscroll-contain rounded-3xl bg-neutral-900 p-5 outline-none md:max-w-3xl md:p-8"
       >
         <div className="flex items-center justify-end">
@@ -50,7 +53,7 @@ export function PostPreviewModal({ post, username, avatarUrl, onClose }: PostPre
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="-m-2 p-2 text-neutral-400 transition-colors hover:text-white active:text-white"
+            className="-m-3.5 p-3.5 text-neutral-400 transition-colors hover:text-white active:text-white"
           >
             <CloseIcon className="h-4 w-4" />
           </button>
@@ -70,7 +73,11 @@ export function PostPreviewModal({ post, username, avatarUrl, onClose }: PostPre
           />
 
           <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-3xl bg-neutral-300 md:aspect-auto md:h-[21.6rem] md:w-[21.6rem] md:shrink-0">
-            <img src={post.photoUrl} alt="" className="h-full w-full object-cover" />
+            <img
+              src={post.photoUrl}
+              alt={post.description ?? `Photo shared by @${username}`}
+              className="h-full w-full object-cover"
+            />
           </div>
         </div>
       </div>

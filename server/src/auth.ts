@@ -20,15 +20,18 @@ import {
   upsertPendingSignup,
 } from "./verificationStore.js";
 import {
+  carriesExifMetadata,
   EXTENSION_BY_FORMAT,
   PHOTO_DATA_URL_RE,
   sniffFormat,
+  withinPixelBudget,
   type ImageFormat,
 } from "./images.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
-const CODE_RE = /^\d{4}$/;
+/** Six digits, matching `generateCode` in email.ts — see the arithmetic there. */
+const CODE_RE = /^\d{6}$/;
 const MAX_EMAIL_LENGTH = 254;
 const MIN_PASSWORD_LENGTH = 8;
 /** bcrypt only reads the first 72 bytes; the cap keeps the rest from being a silent lie. */
@@ -49,6 +52,38 @@ const INVALID_CREDENTIALS = {
 const lockoutByIp = createLockout(config.lockout.perIp);
 const lockoutByAccount = createLockout(config.lockout.perAccount);
 const lockoutByVerifyIp = createLockout(config.lockout.verifyCode);
+
+/**
+ * Wrong codes counted against the *address* being verified, not the caller.
+ *
+ * Everything else that counts guesses is destroyed by the thing it is meant to
+ * bound: five wrong codes delete the pending row (see `/verify-email` below),
+ * and re-running `/signup` writes a fresh one with `attempts = 0`. So nothing
+ * stored in the database can count guesses across that restart — the loop
+ * "guess five times, restart sign-up, guess five more" resets its own counter
+ * every time. This one lives in memory, outlives the row, and is keyed on the
+ * address rather than the source, so rotating IPs doesn't shed it either.
+ *
+ * Note the tradeoff config.ts:lockout warns about — an address-keyed lock is a
+ * lever an attacker can pull against a victim. Here it can only stall a
+ * *sign-up* for the lock window; it is not consulted on `/continue`, so it can
+ * never keep an existing account's owner out of their own account.
+ */
+const lockoutByVerifyEmail = createLockout(config.lockout.verifyCode);
+
+/**
+ * Budget for outbound verification mail, keyed on the destination address.
+ *
+ * `/signup` is unauthenticated and makes this server deliver mail to whatever
+ * address the caller names. The per-row resend cooldown does not bound that:
+ * it is only consulted while a live pending row exists, and the caller can
+ * guarantee one doesn't by burning its attempts or letting it expire. The
+ * `signUp` limiter is per-IP, so rotating sources sheds it too. Keyed on the
+ * address, this survives both, and caps any one victim's inbox — and the
+ * sender reputation of the domain those mails come from — regardless of where
+ * the requests originate.
+ */
+const sendBudgetByEmail = createLockout(config.lockout.verificationSend);
 
 /**
  * Every failure mode of `/verify-email` and `/resend-code` that isn't a wrong
@@ -156,7 +191,11 @@ authRouter.post(
     }
 
     const normalized = normalizeEmail(email);
-    const perIpKey = `${normalized}|${req.ip ?? "unknown"}`;
+    // The address half of this key is chosen by an unauthenticated caller and
+    // may be 254 characters. Truncating it bounds what one entry in the
+    // lockout map can be padded to; no real address is anywhere near this, and
+    // two that share a 64-character prefix only ever share a failure counter.
+    const perIpKey = `${normalized.slice(0, 64)}|${req.ip ?? "unknown"}`;
 
     // Only the per-IP lock refuses outright. It is scoped to one account from
     // one address, so the only person it can shut out is whoever produced the
@@ -246,10 +285,31 @@ authRouter.post(
       });
     }
 
-    const existing = db
-      .prepare("SELECT id FROM users WHERE email = ? COLLATE NOCASE OR username = ? COLLATE NOCASE")
-      .get(normalizedEmail, trimmedUsername);
-    if (existing) {
+    // Checked before the uniqueness lookup below, not just before the send, so
+    // that asking "does this address have an account here?" costs the same
+    // budget as mailing it. This route is the only place that answers that
+    // question without a password.
+    const sendBudgetLockedFor = sendBudgetByEmail.retryAfterMs(normalizedEmail);
+    if (sendBudgetLockedFor > 0) return rejectLocked(res, sendBudgetLockedFor);
+
+    // The email and username halves of the old single lookup are separated so
+    // only the email half charges that budget. A taken *username* is something
+    // a real signer-upper hits several times in a row while picking one, and
+    // must not use up their address's budget; a taken *email* is the answer to
+    // the enumeration question above, and must. The response is identical
+    // either way, so nothing new is disclosed by the split.
+    const emailTaken = db
+      .prepare("SELECT id FROM users WHERE email = ? COLLATE NOCASE")
+      .get(normalizedEmail);
+    if (emailTaken) {
+      sendBudgetByEmail.recordFailure(normalizedEmail);
+      return res.status(409).json({ error: "Username or email is already taken." });
+    }
+
+    const usernameTaken = db
+      .prepare("SELECT id FROM users WHERE username = ? COLLATE NOCASE")
+      .get(trimmedUsername);
+    if (usernameTaken) {
       return res.status(409).json({ error: "Username or email is already taken." });
     }
 
@@ -287,6 +347,9 @@ authRouter.post(
         code: "email_send_failed",
       });
     }
+    // Charged only once a mail actually went out, so a provider outage can't
+    // spend a legitimate signer-upper's budget on messages they never received.
+    sendBudgetByEmail.recordFailure(normalizedEmail);
 
     // Upserting rather than requiring a fresh address is deliberate: running
     // /signup again for the same pending address is the "I lost the email"
@@ -331,17 +394,22 @@ authRouter.post(
       return res.status(400).json({ error: "Enter a valid email address." });
     }
     if (typeof code !== "string" || !CODE_RE.test(code)) {
-      return res.status(400).json({ error: "Enter the 4-digit code." });
+      return res.status(400).json({ error: "Enter the 6-digit code." });
     }
 
     const normalizedEmail = normalizeEmail(email);
 
-    // Scoped to the requesting IP, not the address: the per-row attempt cap
-    // just below already kills one pending sign-up after five wrong codes, so
-    // the only thing left for this to catch is restarting sign-up to buy a
-    // fresh batch of guesses — a loop that walks across addresses.
+    // Two counters, because the per-row attempt cap just below covers neither
+    // case: it kills *one* pending sign-up after five wrong codes, and a fresh
+    // /signup replaces the row with a clean one. The IP-keyed lock catches
+    // restarting sign-up from one source to buy another batch of guesses; the
+    // address-keyed one catches the same loop run from many sources against a
+    // single target address. See the note on `lockoutByVerifyEmail` above.
     const lockedFor = lockoutByVerifyIp.retryAfterMs(req.ip ?? "unknown");
     if (lockedFor > 0) return rejectLocked(res, lockedFor);
+
+    const emailLockedFor = lockoutByVerifyEmail.retryAfterMs(normalizedEmail);
+    if (emailLockedFor > 0) return rejectLocked(res, emailLockedFor);
 
     const pending = findPendingSignup(normalizedEmail);
     if (!pending || pending.expires_at <= Date.now()) return pendingSignupGone(res);
@@ -358,6 +426,7 @@ authRouter.post(
     const submittedHash = hashCode(normalizedEmail, code);
     if (!codeHashMatches(pending.code_hash, submittedHash)) {
       lockoutByVerifyIp.recordFailure(req.ip ?? "unknown");
+      lockoutByVerifyEmail.recordFailure(normalizedEmail);
       const attempts = recordVerifyAttempt(normalizedEmail);
       if (attempts >= config.verification.maxAttempts) {
         // Deleted, not merely locked: the row is self-healing this way — the
@@ -373,11 +442,13 @@ authRouter.post(
       });
     }
 
-    // Not cleared on success: this lock is keyed on IP alone (see config.ts),
-    // and clearing it here would let anyone wipe their own accumulated
-    // failures against *other* addresses just by finishing one unrelated
-    // sign-up — the exact hole `/continue`'s lockout avoids by keying on
-    // `email|ip` instead. Letting the 15-minute window age it out is enough.
+    // Neither lock is cleared on success. The IP-keyed one must not be:
+    // clearing it here would let anyone wipe their accumulated failures against
+    // *other* addresses just by finishing one unrelated sign-up — the exact
+    // hole `/continue`'s lockout avoids by keying on `email|ip` instead. The
+    // address-keyed one has nothing to clear for: this address now has an
+    // account, so it can never reach a pending sign-up again. Letting both age
+    // out of their window is enough.
 
     const stillFree = db
       .prepare("SELECT id FROM users WHERE email = ? COLLATE NOCASE OR username = ? COLLATE NOCASE")
@@ -449,6 +520,11 @@ authRouter.post(
       return pendingSignupGone(res);
     }
 
+    // The same address-keyed budget `/signup` spends from, so the two routes
+    // can't be alternated to double the mail one address receives.
+    const sendBudgetLockedFor = sendBudgetByEmail.retryAfterMs(normalizedEmail);
+    if (sendBudgetLockedFor > 0) return rejectLocked(res, sendBudgetLockedFor);
+
     const code = generateCode();
     const sent = await sendVerificationEmail(normalizedEmail, code);
     if (!sent.ok) {
@@ -457,6 +533,7 @@ authRouter.post(
         code: "email_send_failed",
       });
     }
+    sendBudgetByEmail.recordFailure(normalizedEmail);
 
     recordResend({ email: normalizedEmail, codeHash: hashCode(normalizedEmail, code), now });
     res.status(202).json({
@@ -504,6 +581,16 @@ authRouter.put(
       return res.status(413).json({ error: "That photo is too large." });
     }
     if (sniffFormat(bytes) !== declaredFormat) {
+      return res.status(400).json({ error: "That file isn't a supported image." });
+    }
+    // Same two header-only checks as a post's photo, and the same 400 — see
+    // the comment in posts.ts and the reasoning in images.ts. The blast radius
+    // is larger here: an avatar renders in the feed, on profiles, in the likers
+    // popover and beside every comment.
+    if (
+      !withinPixelBudget(bytes, declaredFormat as ImageFormat) ||
+      carriesExifMetadata(bytes, declaredFormat as ImageFormat)
+    ) {
       return res.status(400).json({ error: "That file isn't a supported image." });
     }
 
@@ -559,7 +646,18 @@ authRouter.delete(
       return res.status(400).json({ error: "Enter your password to confirm." });
     }
 
-    const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.auth!.user.id) as UserRow;
+    // The row can be gone between `attachSession` resolving it and this handler
+    // running — the same account deleted from a second tab does exactly that.
+    // Without the guard the cast below is a lie and the password check throws a
+    // TypeError, which reaches the client as a 500 and buries a real fault in
+    // the log behind noise.
+    const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.auth!.user.id) as
+      | UserRow
+      | undefined;
+    if (!user) {
+      endSession(req, res);
+      return res.status(401).json({ error: "Please sign in.", code: "not_authenticated" });
+    }
     if (!(await verifyPassword(password, user.password_hash))) {
       return res.status(401).json(INVALID_CREDENTIALS);
     }

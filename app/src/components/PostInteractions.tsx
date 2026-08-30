@@ -251,9 +251,9 @@ export function PostInteractions({
               type="button"
               aria-label="Close comments"
               onClick={() => setCommentsOpen(false)}
-              className="-m-2 shrink-0 p-2 text-neutral-400 transition-colors hover:text-white active:text-white"
+              className="-m-3.5 shrink-0 p-3.5 text-neutral-400 transition-colors hover:text-white active:text-white"
             >
-              <CloseIcon className="h-3.5 w-3.5" />
+              <CloseIcon className="h-4 w-4" />
             </button>
           </div>
 
@@ -314,7 +314,7 @@ export function PostInteractions({
                         type="button"
                         aria-label={`Delete comment by @${comment.username}`}
                         onClick={() => handleDeleteComment(comment)}
-                        className="-m-2 mt-0.5 shrink-0 p-2 text-neutral-600 transition-colors hover:text-white active:text-white"
+                        className="-m-4 mt-0.5 shrink-0 p-4 text-neutral-600 transition-colors hover:text-white active:text-white"
                       >
                         <CloseIcon className="h-3 w-3" />
                       </button>
@@ -361,7 +361,7 @@ export function PostInteractions({
                       type="button"
                       aria-label="Close"
                       onClick={() => setLikersOpen(false)}
-                      className="-m-2 p-2 text-neutral-400 transition-colors hover:text-white active:text-white"
+                      className="-m-4 p-4 text-neutral-400 transition-colors hover:text-white active:text-white"
                     >
                       <CloseIcon className="h-3 w-3" />
                     </button>
@@ -417,13 +417,13 @@ export function PostInteractions({
                 maxLength={MAX_COMMENT_LENGTH}
                 placeholder="Add a comment"
                 aria-label="Add a comment"
-                className="min-w-0 flex-1 rounded-full bg-neutral-800 px-4 py-2 text-xs text-white placeholder:text-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-600"
+                className="min-w-0 flex-1 rounded-full bg-neutral-800 px-4 py-2 text-xs text-white placeholder:text-neutral-500 focus:outline-none focus:ring-2 focus:ring-white/60"
               />
               <button
                 type="submit"
                 disabled={!draft.trim() || sending}
                 aria-label="Post comment"
-                className={`flex shrink-0 items-center justify-center p-2 transition-colors active:opacity-70 disabled:opacity-30 ${
+                className={`flex shrink-0 items-center justify-center p-2 transition-opacity active:opacity-70 disabled:opacity-40 ${
                   draft.trim() ? "text-white" : "text-neutral-500"
                 }`}
               >
@@ -438,7 +438,7 @@ export function PostInteractions({
         </div>
       ) : (
         <>
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-300">
               {avatarUrl ? (
                 <img
@@ -452,7 +452,7 @@ export function PostInteractions({
                 <PersonIcon className="h-5 w-5 text-neutral-500" />
               )}
             </span>
-            <span className="text-sm text-white">@{username}</span>
+            <span className="truncate text-sm text-white">@{username}</span>
           </div>
 
           {description && (
@@ -483,8 +483,8 @@ export function PostInteractions({
             >
               <CommentIcon className="h-[1.8rem] w-[1.8rem]" />
               {commentCount > 0 && (
-                <span className="pointer-events-none absolute bottom-1.5 right-1.5 flex min-w-[1rem] items-center justify-center rounded-full bg-neutral-950 px-1 text-[10px] font-semibold leading-none text-white md:bottom-0 md:right-0">
-                  {commentCount}
+                <span className="pointer-events-none absolute bottom-1.5 right-1.5 flex min-w-4 items-center justify-center rounded-full bg-neutral-950 px-1 text-[10px] font-semibold leading-none text-white md:bottom-0 md:right-0">
+                  {commentCount > 99 ? "99+" : commentCount}
                 </span>
               )}
             </button>
@@ -514,7 +514,7 @@ export function PostInteractions({
                     type="button"
                     aria-label="Close"
                     onClick={() => setLikersOpen(false)}
-                    className="-m-2 p-2 text-neutral-400 transition-colors hover:text-white active:text-white"
+                    className="-m-4 p-4 text-neutral-400 transition-colors hover:text-white active:text-white"
                   >
                     <CloseIcon className="h-3 w-3" />
                   </button>

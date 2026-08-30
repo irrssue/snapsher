@@ -2,13 +2,21 @@ import crypto from "node:crypto";
 import { config } from "./config.js";
 
 /**
- * Full 0000-9999. `randomInt`, not `Math.random` — the latter is seeded from a
- * predictable source and isn't a secret generator. Padded and kept as a
- * *string* throughout: `Number("0421")` is `421`, and a leading zero the user
- * is looking at on screen would otherwise never match what's stored.
+ * Full 000000-999999. `randomInt`, not `Math.random` — the latter is seeded
+ * from a predictable source and isn't a secret generator. Padded and kept as a
+ * *string* throughout: `Number("042199")` is `42199`, and a leading zero the
+ * user is looking at on screen would otherwise never match what's stored.
+ *
+ * Six digits rather than four because nothing in the app can count guesses
+ * across a restarted sign-up as reliably as the code space itself bounds them:
+ * a pending row's five-attempt cap dies with the row, and re-running /signup
+ * mints a clean one. Four digits is a 10,000-value space, which the verify
+ * lockout's ~13 guesses/hour/IP walks in weeks from one source and in hours
+ * from fifty. A million values puts the same attack out of reach, and costs a
+ * real user two extra characters they are copying off a screen anyway.
  */
 export function generateCode(): string {
-  return String(crypto.randomInt(0, 10_000)).padStart(4, "0");
+  return String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
 }
 
 /** Bound to the address so one row's hash can't be replayed against another. */
@@ -35,7 +43,15 @@ export async function sendVerificationEmail(email: string, code: string): Promis
     // pretend it sent anything. "Fail closed, not down" — the process boots
     // and everything else serves, only sign-up refuses, rather than every new
     // user being told to check an inbox nothing was ever sent to.
-    if (config.isProd) {
+    //
+    // Gated on its own opt-in rather than on `isProd`, because every other
+    // control in the app already hangs off `NODE_ENV` and this is the one whose
+    // failure mode is silent: a PM2 restart that lost that variable would leave
+    // the process claiming every code was sent while printing it in plaintext
+    // to `pm2 logs`, where anyone with log or backup access could complete any
+    // pending sign-up. `EMAIL_LOG_CODES` is set in the `dev` script and nowhere
+    // else, so a homeserver that loses its env refuses sign-ups instead.
+    if (!config.email.logCodes) {
       console.error("[email] RESEND_API_KEY is unset — cannot send verification codes.");
       return { ok: false };
     }

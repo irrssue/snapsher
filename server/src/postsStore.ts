@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { db, type PostRow } from "./db.js";
 import { avatarUrlFor } from "./avatarsStore.js";
-import { friendIdsFor } from "./friendsStore.js";
+import { areFriends, friendIdsFor } from "./friendsStore.js";
 import { likeStatsFor, type LikeStats } from "./likesStore.js";
 import { commentCountFor } from "./commentsStore.js";
 
@@ -12,11 +12,27 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const uploadsDir = path.join(__dirname, "..", "uploads");
 fs.mkdirSync(uploadsDir, { recursive: true, mode: 0o750 });
+// `mkdirSync`'s mode applies only at creation and is masked by the process
+// umask; a directory that already existed keeps whatever mode it was made with.
+// Re-asserting it here is what makes 0750 true of the homeserver's copy too,
+// rather than only of a freshly created one.
+fs.chmodSync(uploadsDir, 0o750);
 
 /** One photo per 12 hours — the whole point of the product, enforced here. */
 const POST_INTERVAL_MS = 12 * 60 * 60 * 1000;
 
 const FEED_LIMIT = 100;
+
+/**
+ * The profile grid was the one read with no cap at all, so any member could ask
+ * for any other member's entire post history 600 times per quarter hour, and
+ * `likeStatsFor`/`commentCountFor` would compile a fresh prepared statement for
+ * every distinct post count they had never seen before. The 12-hour rule bounds
+ * a history to ~730 posts a year, so this is a robustness bound rather than an
+ * urgent one — but it also makes that statement-cache key space finite, which
+ * is what stops it growing for the life of the process.
+ */
+const PROFILE_GRID_LIMIT = 300;
 
 /**
  * Row-level access control for posts.
@@ -130,7 +146,7 @@ const selectLastPostAt = db.prepare(
 );
 const selectPostCount = db.prepare("SELECT COUNT(*) AS count FROM posts WHERE user_id = ?");
 const selectUserPosts = db.prepare(
-  "SELECT id, description, photo_file, created_at FROM posts WHERE user_id = ? ORDER BY created_at DESC",
+  "SELECT id, description, photo_file, created_at FROM posts WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
 );
 const selectPhotoOwner = db.prepare(
   "SELECT user_id FROM posts WHERE photo_file = ?",
@@ -260,14 +276,24 @@ export type PostSummary = {
  */
 export function listPostsFor(actor: Actor, userId: number): PostSummary[] {
   assertActor(actor);
-  const rows = selectUserPosts.all(userId) as Pick<
+  const rows = selectUserPosts.all(userId, PROFILE_GRID_LIMIT) as Pick<
     PostRow,
     "id" | "description" | "photo_file" | "created_at"
   >[];
   const postIds = rows.map((row) => row.id);
   const stats = likeStatsFor(actor, postIds);
-  const commentCounts = commentCountFor(postIds);
   const isOwner = userId === actor.userId;
+
+  // `commentCountFor` does no visibility check of its own — it trusts the
+  // caller to have filtered first, which the feed does and this did not. The
+  // count is public only on the reasoning that anyone who can open the thread
+  // could count it by scrolling; on a stranger's grid that reasoning doesn't
+  // hold, because `listComments` answers them with a 404. Serving the badge
+  // anyway leaked an activity signal about someone the viewer cannot see the
+  // thread of. A stranger now reads 0, which is what the thread endpoint
+  // already tells them, and the client hides a zero badge on its own.
+  const canSeeThreads = isOwner || areFriends(actor, userId);
+  const commentCounts = canSeeThreads ? commentCountFor(postIds) : new Map<number, number>();
   return rows.map((row) => {
     const rowStats = stats.get(row.id);
     return {

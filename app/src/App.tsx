@@ -214,7 +214,12 @@ function SignedInApp({
         ) : view === "friends" ? (
           <FriendsTab onFriendsChanged={handleFriendsChanged} onViewProfile={setViewingUserId} />
         ) : (
-          <div className="flex w-full max-w-md flex-col items-center gap-8 pt-8 md:pt-16">
+          <div
+            // No `pt-*` here: `main` already supplies `pt-8 md:py-24`, and a
+            // second one shifted the profile tab 32px lower than home and
+            // friends, so the same avatar sat at two heights across tabs.
+            className="flex w-full max-w-md flex-col items-center gap-8"
+          >
             <ProfileAvatar
               user={user}
               onAvatarChange={onAvatarChange}
@@ -258,7 +263,14 @@ function SignedInApp({
           error={friendsPopupError}
           onClose={() => setShowFriendsPopup(false)}
           onRemoveFriend={handleRemoveFriend}
-          onViewProfile={setViewingUserId}
+          // Closing the popup first — the same hand-off `SettingsModal` does to
+          // the cropper and the delete dialog. Left mounted, its `bg-black/80`
+          // backdrop composites with the profile's to ~96% black, and the page
+          // behind reads as blacked out rather than dimmed.
+          onViewProfile={(id) => {
+            setShowFriendsPopup(false);
+            setViewingUserId(id);
+          }}
         />
       )}
 
@@ -273,7 +285,7 @@ function SignedInApp({
  * Widens once the username step succeeds, so the code step and a resend both
  * know who they're verifying without asking again. `token` is the pending
  * sign-up's possession proof from the server — required on every later
- * request for it, but never shown to the user and not the 4-digit code.
+ * request for it, but never shown to the user and not the 6-digit code.
  */
 type PendingSignup = AuthCredentialsData & { username?: string; token?: string };
 

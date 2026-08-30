@@ -3,7 +3,7 @@
 Shipped in commit `df480e7` (pushed to `main`, deployed to the homeserver, PM2 process restarted and online).
 
 ## What's done
-- Sign-up now requires a 4-digit email code before the account is created.
+- Sign-up now requires a 6-digit email code before the account is created.
 - Email provider: **Resend**, called via plain REST (`https://api.resend.com/emails`) using native `fetch` — no SDK/package added, since the homeserver deploy never runs `npm install`.
 - New server files: `server/src/email.ts` (code gen/hash/send), `server/src/verificationStore.ts` (pending-signup storage).
 - New/changed endpoints: `POST /api/auth/signup` (now sends a code + parks a pending row instead of creating the account), `POST /api/auth/verify-email`, `POST /api/auth/resend-code`.

@@ -19,10 +19,12 @@ import {
 import { likersFor, toggleLike, LikeError } from "./likesStore.js";
 import { addComment, CommentError, deleteComment, listComments } from "./commentsStore.js";
 import {
+  carriesExifMetadata,
   CONTENT_TYPE_BY_EXTENSION,
   EXTENSION_BY_FORMAT,
   PHOTO_DATA_URL_RE,
   sniffFormat,
+  withinPixelBudget,
   type ImageFormat,
 } from "./images.js";
 
@@ -101,6 +103,23 @@ postsRouter.post(
       return res.status(413).json({ error: "That photo is too large." });
     }
     if (sniffFormat(bytes) !== declaredFormat) {
+      return res.status(400).json({ error: "That file isn't a supported image." });
+    }
+
+    // Two header-only checks, both answering with the same 400 as the
+    // magic-byte check above so a rejection still discloses nothing:
+    //   - the byte cap says nothing about pixel count, so a small file that
+    //     declares an enormous frame passes everything above and then knocks
+    //     over every browser that later loads this profile. An unreadable
+    //     header is refused too — a size that can't be read can't be bounded.
+    //   - bytes still carrying an Exif block did not come from our client,
+    //     which re-encodes through a <canvas>; storing them re-serves the
+    //     uploader's GPS coordinates to everyone who can see the photo.
+    // Both are explained in full in images.ts.
+    if (
+      !withinPixelBudget(bytes, declaredFormat as ImageFormat) ||
+      carriesExifMetadata(bytes, declaredFormat as ImageFormat)
+    ) {
       return res.status(400).json({ error: "That file isn't a supported image." });
     }
 

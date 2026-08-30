@@ -40,7 +40,24 @@ const CSP = [
   ...(config.isProd ? ["upgrade-insecure-requests"] : []),
 ].join("; ");
 
-export const securityHeaders: RequestHandler = (_req, res, next) => {
+export const securityHeaders: RequestHandler = (req, res, next) => {
+  /**
+   * Scoped to the API, so the hard-cached immutable photo and asset responses
+   * (which declare `private` themselves) are untouched.
+   *
+   * With no directive at all, a response carrying `Last-Modified` or `ETag` is
+   * eligible for heuristic caching by anything in the path — a browser's disk
+   * cache on a shared machine, a corporate proxy, or a future "cache
+   * everything" rule on the Cloudflare zone. The JSON here is `/me` with the
+   * caller's email, the friends-only feed, comment threads and the private
+   * friend list; none of it may outlive the session that asked for it or be
+   * served to a second viewer. `Vary: Cookie` says the same thing to a cache
+   * that ignores `no-store`.
+   */
+  if (req.path.startsWith("/api")) {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Vary", "Cookie");
+  }
   res.setHeader("Content-Security-Policy", CSP);
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
