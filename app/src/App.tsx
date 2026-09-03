@@ -302,15 +302,6 @@ function SignedInApp({
           <div className="flex w-full max-w-md flex-col gap-10 md:max-w-none md:gap-16">
             <h1 className="sr-only">Home feed</h1>
 
-            {/*
-             * The countdown belongs here, not two taps deep on the profile tab
-             * underneath the friend and post counters. It is the whole product,
-             * and burying it meant the constraint was only ever discovered by
-             * failing at it — tap +, pick a photo from your library, and only
-             * then read that Share is disabled for another seven hours.
-             */}
-            <Countdown nextAllowedAt={nextAllowedAt} clockOffset={clockOffset} variant="hero" />
-
             {loadingFeed && !feedError && (
               <>
                 <PostCardSkeleton />
