@@ -3,12 +3,38 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <!-- `viewport-fit=cover` is what lets the page paint under the notch and the
          home-indicator band; without it every `env(safe-area-inset-*)` the app
          uses resolves to 0 and the bottom nav sits inside the indicator. -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0c1014" />
-    <title>Snapsher</title>
+    <meta name="apple-mobile-web-app-title" content="Snapsher" />
+    <!-- The app is dark-only and paints under the status bar, so the bar has to
+         let the page's own colour show through rather than drawing its own. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>Snapsher — one photo, every 12 hours</title>
+    <meta
+      name="description"
+      content="A small social app built around a single constraint: one photo every 12 hours. No like counts, no share button, no vanity metrics."
+    />
+    <meta property="og:title" content="Snapsher" />
+    <meta property="og:description" content="One photo, every 12 hours." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary" />
+    <!--
+      A floor under the header the server already sends. The policy lives in
+      `server/src/security.ts`, which is the one that counts — but the built
+      bundle is a static directory, and anything that ever serves it without
+      that middleware (a static host, a Cloudflare "serve assets" rule) would
+      silently drop the policy entirely. `frame-ancestors` and `report-uri` are
+      ignored in a meta tag; the rest of this is honoured.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'"
+    />
   </head>
   <body>
     <div id="root"></div>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { PersonIcon, SearchIcon } from "./icons";
+import { SearchIcon } from "./icons";
+import { Avatar, Skeleton } from "./ui";
 import {
   acceptFriendRequest,
   cancelFriendRequest,
@@ -28,11 +29,23 @@ type FriendsTabProps = {
   onViewProfile: (userId: number) => void;
 };
 
+/** Holds a `PersonRow`'s shape while the list behind it is in flight. */
+function PersonRowSkeleton() {
+  return (
+    <div className="flex items-center gap-3 px-2 py-2.5">
+      <Skeleton className="h-11 w-11" />
+      <Skeleton className="h-4 w-32" />
+    </div>
+  );
+}
+
 export function FriendsTab({ onFriendsChanged, onViewProfile }: FriendsTabProps) {
   const [subTab, setSubTab] = useState<SubTab>("add");
   const [requests, setRequests] = useState<FriendRequestsResponse>(NO_REQUESTS);
   /** The requests list couldn't be fetched at all — not that there are none. */
   const [loadError, setLoadError] = useState<string | null>(null);
+  /** True until the first requests fetch settles, either way. */
+  const [loadingRequests, setLoadingRequests] = useState(true);
   /** One action failed; the lists themselves are still good. */
   const [actionError, setActionError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -63,6 +76,9 @@ export function FriendsTab({ onFriendsChanged, onViewProfile }: FriendsTabProps)
       .catch((err) => {
         if (!active) return;
         setLoadError(err instanceof Error ? err.message : "Couldn't load your requests.");
+      })
+      .finally(() => {
+        if (active) setLoadingRequests(false);
       });
     return () => {
       active = false;
@@ -247,7 +263,7 @@ export function FriendsTab({ onFriendsChanged, onViewProfile }: FriendsTabProps)
 
   return (
     <div className="flex w-full max-w-md flex-col gap-6">
-      <div className="flex justify-center gap-1 self-center rounded-full bg-neutral-800 p-1">
+      <div className="flex justify-center gap-1 self-center rounded-full bg-field p-1">
         <button
           type="button"
           onClick={() => setSubTab("add")}
@@ -291,13 +307,21 @@ export function FriendsTab({ onFriendsChanged, onViewProfile }: FriendsTabProps)
        * it masked every later action error for the rest of the session — the
        * Add button flipped to "Requested" and back with nothing said.
        */}
-      {loadError && <p className="text-center text-sm text-red-400">{loadError}</p>}
-      {actionError && <p className="text-center text-sm text-red-400">{actionError}</p>}
+      {loadError && (
+        <p className="text-center text-sm text-red-400" role="alert">
+          {loadError}
+        </p>
+      )}
+      {actionError && (
+        <p className="text-center text-sm text-red-400" role="alert">
+          {actionError}
+        </p>
+      )}
 
       {subTab === "add" ? (
         <div className="flex flex-col gap-6">
           <label className="relative block">
-            <SearchIcon className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
+            <SearchIcon className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
             <input
               type="search"
               inputMode="search"
@@ -313,7 +337,7 @@ export function FriendsTab({ onFriendsChanged, onViewProfile }: FriendsTabProps)
               maxLength={30}
               placeholder="Search all users"
               aria-label="Search all users"
-              className="w-full rounded-full bg-neutral-800 py-2 pl-10 pr-4 text-sm text-white placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-white/60"
+              className="min-h-11 w-full rounded-full bg-field pl-10 pr-4 text-sm text-white placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-white/60"
             />
           </label>
 
@@ -336,8 +360,17 @@ export function FriendsTab({ onFriendsChanged, onViewProfile }: FriendsTabProps)
             ))}
 
             {/* `searching` covers both the debounce and the request in flight,
-                so "No one matches" is only ever an answer, never a guess. */}
-            {discoverableUsers.length === 0 && !searching && (
+                so "No one matches" is only ever an answer, never a guess. It
+                used to *only* suppress that line, which left the results area
+                completely blank for the whole wait. */}
+            {searching && discoverableUsers.length === 0 && (
+              <div role="status" aria-label="Searching">
+                <PersonRowSkeleton />
+                <PersonRowSkeleton />
+              </div>
+            )}
+
+            {discoverableUsers.length === 0 && !searching && !actionError && (
               <p className="break-words pt-8 text-center text-sm text-neutral-400">
                 {query.trim() ? `No one matches "${query}".` : "Search for someone to add."}
               </p>
@@ -363,14 +396,14 @@ export function FriendsTab({ onFriendsChanged, onViewProfile }: FriendsTabProps)
                     <button
                       type="button"
                       onClick={() => handleDeclineRequest(request)}
-                      className="rounded-full bg-neutral-800 px-3 py-2.5 text-xs text-neutral-300 transition-colors hover:text-white active:text-white"
+                      className="flex min-h-11 items-center rounded-full bg-field px-3 text-xs text-neutral-300 transition-colors hover:bg-neutral-700 hover:text-white active:bg-neutral-700 active:text-white"
                     >
                       Decline
                     </button>
                     <button
                       type="button"
                       onClick={() => handleAcceptRequest(request)}
-                      className="rounded-full bg-white px-3 py-2.5 text-xs text-black transition-opacity hover:opacity-90 active:opacity-70"
+                      className="flex min-h-11 items-center rounded-full bg-white px-3 text-xs font-medium text-black transition-colors hover:bg-neutral-200 active:bg-neutral-200"
                     >
                       Accept
                     </button>
@@ -379,7 +412,14 @@ export function FriendsTab({ onFriendsChanged, onViewProfile }: FriendsTabProps)
               />
             ))}
 
-            {requests.incoming.length === 0 && !loadError && (
+            {loadingRequests && (
+              <div role="status" aria-label="Loading requests">
+                <PersonRowSkeleton />
+                <PersonRowSkeleton />
+              </div>
+            )}
+
+            {!loadingRequests && requests.incoming.length === 0 && !loadError && (
               <p className="pt-8 text-center text-sm text-neutral-400">No pending requests.</p>
             )}
           </div>
@@ -392,7 +432,7 @@ export function FriendsTab({ onFriendsChanged, onViewProfile }: FriendsTabProps)
            */}
           {requests.outgoing.length > 0 && (
             <div className="flex flex-col gap-1">
-              <h2 className="px-2 text-xs uppercase tracking-widest text-neutral-500">
+              <h2 className="px-2 text-xs uppercase tracking-widest text-neutral-400">
                 Sent
               </h2>
               {requests.outgoing.map((request) => (
@@ -405,7 +445,7 @@ export function FriendsTab({ onFriendsChanged, onViewProfile }: FriendsTabProps)
                     <button
                       type="button"
                       onClick={() => handleCancelRequest(request)}
-                      className="shrink-0 rounded-full bg-neutral-800 px-4 py-2.5 text-xs text-neutral-300 transition-colors hover:text-white active:text-white"
+                      className="flex min-h-11 shrink-0 items-center rounded-full bg-field px-4 text-xs text-neutral-300 transition-colors hover:bg-neutral-700 hover:text-white active:bg-neutral-700 active:text-white"
                     >
                       Cancel
                     </button>
@@ -439,7 +479,7 @@ function SearchRowAction({
 }) {
   if (user.requestState === "friends") {
     return (
-      <span className="shrink-0 rounded-full bg-neutral-900 px-4 py-2.5 text-xs text-neutral-500">
+      <span className="flex min-h-11 shrink-0 items-center rounded-full bg-surface px-4 text-xs text-neutral-400">
         Friends
       </span>
     );
@@ -450,7 +490,7 @@ function SearchRowAction({
       <button
         type="button"
         onClick={onAccept}
-        className="shrink-0 rounded-full bg-white px-4 py-2.5 text-xs text-black transition-opacity hover:opacity-90 active:opacity-70"
+        className="flex min-h-11 shrink-0 items-center rounded-full bg-white px-4 text-xs font-medium text-black transition-colors hover:bg-neutral-200 active:bg-neutral-200"
       >
         Accept
       </button>
@@ -463,12 +503,12 @@ function SearchRowAction({
       // that silently cancelled on tap is the same trap the friends list's
       // unconfirmed "Remove" was.
       <div className="flex shrink-0 items-center gap-1.5">
-        <span className="text-xs text-neutral-500">Requested</span>
+        <span className="text-xs text-neutral-400">Requested</span>
         <button
           type="button"
           onClick={onCancel}
           aria-label={`Cancel friend request to @${user.username}`}
-          className="rounded-full bg-neutral-800 px-3 py-2.5 text-xs text-neutral-300 transition-colors hover:text-white active:text-white"
+          className="flex min-h-11 items-center rounded-full bg-field px-3 text-xs text-neutral-300 transition-colors hover:bg-neutral-700 hover:text-white active:bg-neutral-700 active:text-white"
         >
           Cancel
         </button>
@@ -480,7 +520,7 @@ function SearchRowAction({
     <button
       type="button"
       onClick={onAdd}
-      className="shrink-0 rounded-full bg-white px-4 py-2.5 text-xs text-black transition-opacity hover:opacity-90 active:opacity-70"
+      className="flex min-h-11 shrink-0 items-center rounded-full bg-white px-4 text-xs font-medium text-black transition-colors hover:bg-neutral-200 active:bg-neutral-200"
     >
       Add
     </button>
@@ -504,26 +544,14 @@ export function PersonRow({
   // highlight was exactly the background there, so hover and press showed
   // nothing at all. Matches the row highlight in `SettingsModal`.
   return (
-    <div className="flex items-center gap-3 rounded-2xl px-2 py-2.5 transition-colors hover:bg-neutral-800 active:bg-neutral-800">
+    <div className="flex items-center gap-3 rounded-control px-2 py-2.5 transition-colors hover:bg-field active:bg-field">
       <button
         type="button"
         onClick={onClick}
         disabled={!onClick}
         className="flex flex-1 items-center gap-3 text-left disabled:cursor-default"
       >
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-700">
-          {avatarUrl ? (
-            <img
-              src={avatarUrl}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              className="h-full w-full object-cover"
-            />
-          ) : (
-            <PersonIcon className="h-6 w-6 text-neutral-400" />
-          )}
-        </span>
+          <Avatar url={avatarUrl} size="lg" />
 
         <span className="flex-1 truncate text-sm text-white">@{username}</span>
       </button>

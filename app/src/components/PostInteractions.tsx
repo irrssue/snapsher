@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useRef, useState } from "react";
 import type { Comment, Liker } from "../types";
 import {
   addComment,
@@ -7,7 +7,8 @@ import {
   fetchLikers,
   toggleLike,
 } from "../api/posts";
-import { CloseIcon, CommentIcon, HeartIcon, PersonIcon, SendIcon } from "./icons";
+import { CloseIcon, CommentIcon, HeartIcon, SendIcon } from "./icons";
+import { Avatar } from "./ui";
 
 const postDateFormatter = new Intl.DateTimeFormat("en-US", {
   weekday: "short",
@@ -48,6 +49,59 @@ type PostInteractionsProps = {
  * feed) and `PostPreviewModal` (a profile grid photo) — same interactions,
  * same layout, just wrapped in different chrome by each caller.
  */
+/**
+ * The "liked by" list, which only a post's own author can open.
+ *
+ * Rendered once and used from both branches of the `commentsOpen` ternary. It
+ * used to be written out twice, verbatim, roughly fifty lines each — so it was
+ * also the only place in the app carrying a `shadow-lg`, twice.
+ */
+const LikersPopover = forwardRef<
+  HTMLDivElement,
+  { likers: Liker[] | null; error: string | null; onClose: () => void }
+>(function LikersPopover({ likers, error, onClose }, ref) {
+  return (
+    <div
+      ref={ref}
+      className="absolute bottom-full left-0 z-10 mb-2 w-52 rounded-control bg-field p-3 shadow-lg"
+    >
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-xs font-semibold text-white">Liked by</span>
+        <button
+          type="button"
+          aria-label="Close"
+          onClick={onClose}
+          className="-m-4 p-4 text-neutral-400 transition-colors hover:text-white active:text-white"
+        >
+          <CloseIcon className="h-3 w-3" />
+        </button>
+      </div>
+
+      {error && (
+        <p className="text-xs text-red-400" role="alert">
+          {error}
+        </p>
+      )}
+      {!error && likers === null && (
+        <p className="text-xs text-neutral-400" role="status">
+          Loading…
+        </p>
+      )}
+      {!error && likers?.length === 0 && <p className="text-xs text-neutral-400">No likes yet.</p>}
+      {likers && likers.length > 0 && (
+        <ul className="flex max-h-48 flex-col gap-2 overflow-y-auto overscroll-contain">
+          {likers.map((liker) => (
+            <li key={liker.id} className="flex items-center gap-2">
+              <Avatar url={liker.avatarUrl} size="xs" />
+              <span className="truncate text-xs text-white">@{liker.username}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+});
+
 export function PostInteractions({
   postId,
   username,
@@ -251,24 +305,12 @@ export function PostInteractions({
          */
         <div
           ref={commentsPanelRef}
-          className="order-1 flex h-[26rem] flex-col overflow-hidden rounded-3xl bg-neutral-900 ring-1 ring-white/5 md:order-none md:h-[21.6rem]"
+          className="order-1 flex h-(--size-comments) flex-col overflow-hidden rounded-shell bg-surface ring-1 ring-white/5 md:order-none md:h-(--size-photo)"
         >
           <div className="flex items-center gap-2 border-b border-white/5 px-4 py-3">
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-300">
-              {avatarUrl ? (
-                <img
-                  src={avatarUrl}
-                  alt=""
-                  loading="lazy"
-                  decoding="async"
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <PersonIcon className="h-4 w-4 text-neutral-500" />
-              )}
-            </span>
+            <Avatar url={avatarUrl} size="sm" />
             <span className="truncate text-sm font-medium text-white">@{username}</span>
-            <span className="ml-auto shrink-0 text-xs text-neutral-500">
+            <span className="ml-auto shrink-0 text-xs text-neutral-400">
               {postDateFormatter.format(new Date(createdAt))}
             </span>
             <button
@@ -283,20 +325,29 @@ export function PostInteractions({
 
           <div className="flex flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-4 py-3">
             {description && (
-              <p className="whitespace-pre-line break-words text-xs leading-relaxed text-neutral-300">
+              <p
+                dir="auto"
+                className="whitespace-pre-line wrap-anywhere text-xs leading-relaxed text-neutral-300"
+              >
                 <span className="font-semibold text-white">@{username} </span>
                 {description}
               </p>
             )}
 
-            {commentsError && <p className="text-xs text-red-400">{commentsError}</p>}
+            {commentsError && (
+              <p className="text-xs text-red-400" role="alert">
+                {commentsError}
+              </p>
+            )}
 
             {comments === null && !commentsError && (
-              <p className="py-2 text-center text-xs text-neutral-500">Loading…</p>
+              <p className="py-2 text-center text-xs text-neutral-400" role="status">
+                Loading…
+              </p>
             )}
 
             {comments?.length === 0 && (
-              <p className="py-2 text-center text-xs text-neutral-500">
+              <p className="py-2 text-center text-xs text-neutral-400">
                 No comments yet — be the first.
               </p>
             )}
@@ -305,30 +356,27 @@ export function PostInteractions({
               <ul className="flex flex-col gap-2">
                 {comments.map((comment) => (
                   <li key={comment.id} className="flex items-start gap-1.5">
-                    <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-300 ring-1 ring-white/10">
-                      {comment.avatarUrl ? (
-                        <img
-                          src={comment.avatarUrl}
-                          alt=""
-                          loading="lazy"
-                          decoding="async"
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <PersonIcon className="h-4 w-4 text-neutral-500" />
-                      )}
+                    <span className="mt-0.5">
+                      <Avatar url={comment.avatarUrl} size="sm" ring />
                     </span>
 
-                    <div className="min-w-0 flex-1 rounded-2xl bg-neutral-800 px-3 py-1.5">
+                    <div className="min-w-0 flex-1 rounded-control bg-field px-3 py-1.5">
                       <div className="flex items-baseline gap-2">
                         <span className="truncate text-xs font-semibold text-white">
                           @{comment.username}
                         </span>
-                        <span className="ml-auto shrink-0 text-[10px] text-neutral-500">
+                        <span className="ml-auto shrink-0 text-[10px] text-neutral-400">
                           {commentTimeFormatter.format(new Date(comment.createdAt))}
                         </span>
                       </div>
-                      <p className="whitespace-pre-line break-words text-xs leading-relaxed text-neutral-200">
+                      {/* `dir="auto"` lets a comment written in Arabic or Hebrew
+                          set its own paragraph direction; `wrap-anywhere` is what
+                          breaks a 500-character unbroken token, which
+                          `break-words` alone will not. */}
+                      <p
+                        dir="auto"
+                        className="whitespace-pre-line wrap-anywhere text-xs leading-relaxed text-neutral-200"
+                      >
                         {comment.body}
                       </p>
                     </div>
@@ -338,7 +386,7 @@ export function PostInteractions({
                         type="button"
                         aria-label={`Delete comment by @${comment.username}`}
                         onClick={() => handleDeleteComment(comment)}
-                        className="-m-4 mt-0.5 shrink-0 p-4 text-neutral-600 transition-colors hover:text-white active:text-white"
+                        className="-m-4 mt-0.5 shrink-0 p-4 text-neutral-400 transition-colors hover:text-white active:text-white"
                       >
                         <CloseIcon className="h-3 w-3" />
                       </button>
@@ -357,10 +405,10 @@ export function PostInteractions({
                 aria-pressed={liked}
                 onClick={handleToggleLike}
                 className={`-m-2 p-2 transition-opacity hover:opacity-70 active:opacity-70 ${
-                  liked ? "text-green-500" : ""
+                  liked ? "text-white" : "text-neutral-400"
                 }`}
               >
-                <HeartIcon className="h-[1.8rem] w-[1.8rem]" />
+                <HeartIcon className="h-7 w-7" />
               </button>
               {/* Only the post's own author ever gets a like count to click into. */}
               {isOwner && (
@@ -368,61 +416,19 @@ export function PostInteractions({
                   ref={likersToggleRef}
                   type="button"
                   onClick={() => setLikersOpen((open) => !open)}
-                  className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
+                  className="-m-2 flex min-h-11 items-center p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
                 >
                   {likeCount} {likeCount === 1 ? "like" : "likes"}
                 </button>
               )}
 
               {likersOpen && (
-                <div
+                <LikersPopover
                   ref={likersRef}
-                  className="absolute bottom-full left-0 z-10 mb-2 w-52 rounded-2xl bg-neutral-800 p-3 shadow-lg"
-                >
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="text-xs font-semibold text-white">Liked by</span>
-                    <button
-                      type="button"
-                      aria-label="Close"
-                      onClick={() => setLikersOpen(false)}
-                      className="-m-4 p-4 text-neutral-400 transition-colors hover:text-white active:text-white"
-                    >
-                      <CloseIcon className="h-3 w-3" />
-                    </button>
-                  </div>
-
-                  {likersError && <p className="text-xs text-red-400">{likersError}</p>}
-                  {!likersError && likers === null && (
-                    <p className="text-xs text-neutral-400">Loading…</p>
-                  )}
-                  {!likersError && likers?.length === 0 && (
-                    <p className="text-xs text-neutral-400">No likes yet.</p>
-                  )}
-                  {likers && likers.length > 0 && (
-                    <ul className="flex max-h-48 flex-col gap-2 overflow-y-auto overscroll-contain">
-                      {likers.map((liker) => (
-                        <li key={liker.id} className="flex items-center gap-2">
-                          <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-300">
-                            {liker.avatarUrl ? (
-                              <img
-                                src={liker.avatarUrl}
-                                alt=""
-                                loading="lazy"
-                                decoding="async"
-                                className="h-full w-full object-cover"
-                              />
-                            ) : (
-                              <PersonIcon className="h-4 w-4 text-neutral-500" />
-                            )}
-                          </span>
-                          <span className="truncate text-xs text-white">
-                            @{liker.username}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
+                  likers={likers}
+                  error={likersError}
+                  onClose={() => setLikersOpen(false)}
+                />
               )}
             </div>
 
@@ -441,18 +447,25 @@ export function PostInteractions({
                 maxLength={MAX_COMMENT_LENGTH}
                 placeholder="Add a comment"
                 aria-label="Add a comment"
-                className="min-w-0 flex-1 rounded-full bg-neutral-800 px-4 py-2 text-xs text-white placeholder:text-neutral-500 focus:outline-none focus:ring-2 focus:ring-white/60"
+                className="min-h-11 min-w-0 flex-1 rounded-full bg-field px-4 text-xs text-white placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-white/60"
               />
               <button
                 type="submit"
                 disabled={!draft.trim() || sending}
                 aria-label="Post comment"
-                className={`flex shrink-0 items-center justify-center p-2 transition-opacity active:opacity-70 disabled:opacity-40 ${
-                  draft.trim() ? "text-white" : "text-neutral-500"
+                className={`-m-1.5 flex min-h-11 shrink-0 items-center justify-center p-1.5 transition-opacity active:opacity-70 disabled:opacity-60 ${
+                  draft.trim() ? "text-white" : "text-neutral-400"
                 }`}
               >
                 {sending ? (
-                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-neutral-500/30 border-t-neutral-300" />
+                  <>
+                    {/* A bare spinner is a static dot under reduced motion, so
+                        the only signal that anything is happening disappears
+                        for the people who asked for less of it. */}
+                    <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-neutral-500/30 border-t-neutral-300 motion-reduce:hidden" />
+                    <span className="hidden text-xs motion-reduce:inline">Sending…</span>
+                    <span className="sr-only">Sending your comment…</span>
+                  </>
                 ) : (
                   <SendIcon className="h-4 w-4" />
                 )}
@@ -463,24 +476,15 @@ export function PostInteractions({
       ) : (
         <>
           <div className="flex min-w-0 items-center gap-2">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-300">
-              {avatarUrl ? (
-                <img
-                  src={avatarUrl}
-                  alt=""
-                  loading="lazy"
-                  decoding="async"
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <PersonIcon className="h-5 w-5 text-neutral-500" />
-              )}
-            </span>
+            <Avatar url={avatarUrl} size="md" />
             <span className="truncate text-sm text-white">@{username}</span>
           </div>
 
           {description && (
-            <div className="whitespace-pre-line break-words rounded-2xl bg-neutral-800 px-4 py-3 text-sm text-neutral-200">
+            <div
+              dir="auto"
+              className="whitespace-pre-line wrap-anywhere rounded-control bg-field px-4 py-3 text-sm text-neutral-200"
+            >
               {description}
             </div>
           )}
@@ -492,10 +496,10 @@ export function PostInteractions({
               aria-pressed={liked}
               onClick={handleToggleLike}
               className={`p-2 transition-opacity hover:opacity-70 active:opacity-70 md:p-0 ${
-                liked ? "text-green-500" : ""
+                liked ? "text-white" : "text-neutral-400"
               }`}
             >
-              <HeartIcon className="h-[1.8rem] w-[1.8rem]" />
+              <HeartIcon className="h-7 w-7" />
             </button>
             <button
               ref={commentsToggleRef}
@@ -505,7 +509,7 @@ export function PostInteractions({
               onClick={() => setCommentsOpen(true)}
               className="relative p-2 transition-opacity hover:opacity-70 active:opacity-70 md:p-0"
             >
-              <CommentIcon className="h-[1.8rem] w-[1.8rem]" />
+              <CommentIcon className="h-7 w-7" />
               {commentCount > 0 && (
                 <span className="pointer-events-none absolute bottom-1.5 right-1.5 flex min-w-4 items-center justify-center rounded-full bg-neutral-950 px-1 text-[10px] font-semibold leading-none text-white md:bottom-0 md:right-0">
                   {commentCount > 99 ? "99+" : commentCount}
@@ -518,7 +522,7 @@ export function PostInteractions({
                 ref={likersToggleRef}
                 type="button"
                 onClick={() => setLikersOpen((open) => !open)}
-                className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
+                className="-m-2 flex min-h-11 items-center p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
               >
                 {likeCount} {likeCount === 1 ? "like" : "likes"}
               </button>
@@ -528,52 +532,12 @@ export function PostInteractions({
             </span>
 
             {likersOpen && (
-              <div
+              <LikersPopover
                 ref={likersRef}
-                className="absolute bottom-full left-0 z-10 mb-2 w-52 rounded-2xl bg-neutral-800 p-3 shadow-lg"
-              >
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-xs font-semibold text-white">Liked by</span>
-                  <button
-                    type="button"
-                    aria-label="Close"
-                    onClick={() => setLikersOpen(false)}
-                    className="-m-4 p-4 text-neutral-400 transition-colors hover:text-white active:text-white"
-                  >
-                    <CloseIcon className="h-3 w-3" />
-                  </button>
-                </div>
-
-                {likersError && <p className="text-xs text-red-400">{likersError}</p>}
-                {!likersError && likers === null && (
-                  <p className="text-xs text-neutral-400">Loading…</p>
-                )}
-                {!likersError && likers?.length === 0 && (
-                  <p className="text-xs text-neutral-400">No likes yet.</p>
-                )}
-                {likers && likers.length > 0 && (
-                  <ul className="flex max-h-48 flex-col gap-2 overflow-y-auto overscroll-contain">
-                    {likers.map((liker) => (
-                      <li key={liker.id} className="flex items-center gap-2">
-                        <span className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-300">
-                          {liker.avatarUrl ? (
-                            <img
-                              src={liker.avatarUrl}
-                              alt=""
-                              loading="lazy"
-                              decoding="async"
-                              className="h-full w-full object-cover"
-                            />
-                          ) : (
-                            <PersonIcon className="h-4 w-4 text-neutral-500" />
-                          )}
-                        </span>
-                        <span className="truncate text-xs text-white">@{liker.username}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
+                likers={likers}
+                error={likersError}
+                onClose={() => setLikersOpen(false)}
+              />
             )}
           </div>
         </>

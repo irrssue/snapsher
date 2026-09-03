@@ -11,6 +11,11 @@ type PostGridProps = {
   onPostDeleted?: (postId: string) => void;
   /** Bubbles a comment add/delete out so the list backing this grid can refetch. */
   onCountsChanged?: () => void;
+  /**
+   * "No posts yet." is the wrong sentence on your own profile and a slightly
+   * cold one on someone else's, so the owner of the grid names it.
+   */
+  emptyLabel?: string;
 };
 
 /** Instagram-style 3-across grid of a profile's photos, cropped to squares. */
@@ -20,6 +25,7 @@ export function PostGrid({
   avatarUrl,
   onPostDeleted,
   onCountsChanged,
+  emptyLabel = "No photos yet.",
 }: PostGridProps) {
   // The id rather than the post itself: a snapshot goes stale the moment the
   // list behind it is refetched, so an open preview kept showing counts from
@@ -30,7 +36,7 @@ export function PostGrid({
   const previewPost = posts.find((post) => post.id === previewPostId) ?? null;
 
   if (posts.length === 0) {
-    return <p className="py-8 text-center text-sm text-neutral-400">No posts yet.</p>;
+    return <p className="py-8 text-center text-sm text-neutral-400">{emptyLabel}</p>;
   }
 
   return (
@@ -41,8 +47,14 @@ export function PostGrid({
             key={post.id}
             type="button"
             onClick={() => setPreviewPostId(post.id)}
-            aria-label="View photo"
-            className="aspect-square cursor-pointer overflow-hidden bg-neutral-800"
+            // Every cell used to announce the same "View photo", so tabbing a
+            // thirty-photo grid was thirty identical stops.
+            aria-label={
+              post.description
+                ? `View photo: ${post.description}`
+                : `View photo from ${new Date(post.createdAt).toLocaleDateString()}`
+            }
+            className="aspect-square cursor-pointer overflow-hidden bg-field"
           >
             <img
               src={post.photoUrl}

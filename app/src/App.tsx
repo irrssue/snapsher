@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { NavBar } from "./components/NavBar";
 import { PostCard } from "./components/PostCard";
 import { FriendsTab } from "./components/FriendsTab";
@@ -27,6 +27,7 @@ import { createPost, fetchPosts, fetchQuota } from "./api/posts";
 import { fetchFriends, fetchUserPosts, removeFriend, type Friend } from "./api/friends";
 import { ApiError, onSessionExpired } from "./api/http";
 import type { Post, PostSummary, User } from "./types";
+import { ErrorState, Skeleton, Wordmark } from "./components/ui";
 
 /**
  * The friend list arrives ordered by `username COLLATE NOCASE` — an ASCII
@@ -39,6 +40,23 @@ function byUsernameNoCase(a: Friend, b: Friend): number {
   const left = a.username.toLowerCase();
   const right = b.username.toLowerCase();
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/** Holds a feed card's shape while the first load is in flight. */
+function PostCardSkeleton() {
+  return (
+    <div className="flex w-full flex-col gap-3 md:flex-row md:items-center md:justify-center md:gap-10">
+      <div className="flex flex-col gap-3 md:w-64">
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-8 w-8" />
+          <Skeleton className="h-4 w-24" />
+        </div>
+        <Skeleton className="h-3 w-full" />
+        <Skeleton className="h-3 w-2/3" />
+      </div>
+      <Skeleton className="aspect-square w-full rounded-shell md:aspect-auto md:h-(--size-photo) md:w-(--size-photo) md:shrink-0" />
+    </div>
+  );
 }
 
 /**
@@ -87,6 +105,29 @@ function SignedInApp({
   const [friendsPopupError, setFriendsPopupError] = useState<string | null>(null);
   /** The user id behind an open public-profile modal — null means none is open. */
   const [viewingUserId, setViewingUserId] = useState<number | null>(null);
+
+  /**
+   * The three views are a ternary, so switching tabs unmounts the one being
+   * left. `posts` survives in this component, but the browser clamps `scrollY`
+   * against the much shorter profile tab, so coming back to a feed you were
+   * twenty photos into landed you at the top of it. Recorded on the way out and
+   * restored in a layout effect, before paint, so there is no visible jump.
+   */
+  const scrollPositions = useRef<Record<string, number>>({});
+
+  const changeView = useCallback(
+    (next: "home" | "friends" | "profile") => {
+      setView((current) => {
+        scrollPositions.current[current] = window.scrollY;
+        return next;
+      });
+    },
+    [],
+  );
+
+  useLayoutEffect(() => {
+    window.scrollTo(0, scrollPositions.current[view] ?? 0);
+  }, [view]);
 
   /**
    * Each refresh below can be started from several places at once — mount,
@@ -245,11 +286,13 @@ function SignedInApp({
   }
 
   return (
-    <div className="min-h-dvh bg-[#0c1014]">
+    <div className="min-h-dvh bg-ground">
       <NavBar
         active={view}
-        onChange={setView}
+        onChange={changeView}
         onAddPost={() => setComposing(true)}
+        nextAllowedAt={nextAllowedAt}
+        clockOffset={clockOffset}
       />
 
       {/* The bottom padding clears the fixed nav *and* the home-indicator
@@ -257,23 +300,72 @@ function SignedInApp({
       <main className="flex justify-center px-4 pb-[calc(7rem+env(safe-area-inset-bottom))] pt-8 md:px-6 md:py-24">
         {view === "home" ? (
           <div className="flex w-full max-w-md flex-col gap-10 md:max-w-none md:gap-16">
+            <h1 className="sr-only">Home feed</h1>
+
+            {/*
+             * The countdown belongs here, not two taps deep on the profile tab
+             * underneath the friend and post counters. It is the whole product,
+             * and burying it meant the constraint was only ever discovered by
+             * failing at it — tap +, pick a photo from your library, and only
+             * then read that Share is disabled for another seven hours.
+             */}
+            <Countdown nextAllowedAt={nextAllowedAt} clockOffset={clockOffset} variant="hero" />
+
+            {loadingFeed && !feedError && (
+              <>
+                <PostCardSkeleton />
+                <PostCardSkeleton />
+              </>
+            )}
+
             {posts.map((post) => (
               // The grid's counts come from a different call than the feed's,
               // so a comment left here has to send the other one back for a
               // fresh copy or the badge on the profile stays a comment behind.
               <PostCard key={post.id} post={post} onCountsChanged={refreshMyPosts} />
             ))}
-            {feedError && (
-              <p className="text-center text-sm text-red-400">{feedError}</p>
-            )}
+
+            {feedError && <ErrorState message={feedError} onRetry={refreshFeed} />}
+
             {!loadingFeed && !feedError && posts.length === 0 && (
-              <p className="text-center text-sm text-neutral-400">
-                Nothing shared yet. Tap + to share your photo.
+              /*
+               * The first thing a brand-new account sees. It used to be one
+               * grey sentence naming a control the user had to go find; it now
+               * says what the app is for and puts the way to fill the feed
+               * directly under it.
+               */
+              <div className="flex flex-col items-center gap-3 py-6 text-center">
+                <p className="text-sm text-neutral-300">Your feed is your friends' photos.</p>
+                <p className="max-w-xs text-xs text-neutral-400">
+                  Add a few people and their photos land here — one each, every 12 hours.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => changeView("friends")}
+                  className="min-h-11 text-sm text-neutral-300 underline underline-offset-4 transition-colors hover:text-white active:text-white"
+                >
+                  Find people to add
+                </button>
+              </div>
+            )}
+
+            {/*
+             * An end cap, on a product built against endless scrolling. The
+             * feed simply stopped before, which reads as "still loading" — this
+             * is the one place the app gets to say the scrolling is over and
+             * mean it.
+             */}
+            {!loadingFeed && !feedError && posts.length > 0 && (
+              <p className="pb-4 text-center text-xs text-neutral-400">
+                That's everyone's photo for now.
               </p>
             )}
           </div>
         ) : view === "friends" ? (
-          <FriendsTab onFriendsChanged={handleFriendsChanged} onViewProfile={setViewingUserId} />
+          <>
+            <h1 className="sr-only">Find people</h1>
+            <FriendsTab onFriendsChanged={handleFriendsChanged} onViewProfile={setViewingUserId} />
+          </>
         ) : (
           <div
             // No `pt-*` here: `main` already supplies `pt-8 md:py-24`, and a
@@ -287,18 +379,28 @@ function SignedInApp({
               onLogout={onLogout}
               onAccountDeleted={onAccountDeleted}
             />
-            <span className="text-white">@{user.username}</span>
+            <h1 className="break-words text-lg text-white">@{user.username}</h1>
 
-            <div className="flex items-center gap-6 text-sm">
-              <button
-                type="button"
-                onClick={() => setShowFriendsPopup(true)}
-                className="-m-2 p-2 text-neutral-300 transition-colors hover:text-white active:text-white"
-              >
-                {friends.length} Friends
-              </button>
-              <span className="text-neutral-300">{postCount} posts</span>
-            </div>
+            {/* Both counters start at 0 and used to render as data immediately,
+                so a user with thirty friends read "0 Friends" until the fetch
+                landed — indistinguishable from actually having none. */}
+            {loadingFeed ? (
+              <div className="flex items-center gap-6">
+                <Skeleton className="h-5 w-20" />
+                <Skeleton className="h-5 w-16" />
+              </div>
+            ) : (
+              <div className="flex items-center gap-6 text-sm">
+                <button
+                  type="button"
+                  onClick={() => setShowFriendsPopup(true)}
+                  className="-m-3.5 p-3.5 text-neutral-300 transition-colors hover:text-white active:text-white"
+                >
+                  {friends.length} Friends
+                </button>
+                <span className="text-neutral-300">{postCount} posts</span>
+              </div>
+            )}
 
             <Countdown nextAllowedAt={nextAllowedAt} clockOffset={clockOffset} />
 
@@ -308,6 +410,7 @@ function SignedInApp({
               avatarUrl={user.avatarUrl}
               onPostDeleted={handlePostDeleted}
               onCountsChanged={refreshMyPosts}
+              emptyLabel="Your photos will appear here."
             />
           </div>
         )}
@@ -599,7 +702,20 @@ function App() {
   }
 
   if (checkingSession) {
-    return <div className="min-h-dvh bg-[#0c1014]" />;
+    /*
+     * The very first thing every visit renders. It was a bare black div with no
+     * spinner and no timeout, so a cold or slow connection showed an
+     * unexplained black screen — as an unbranded first impression of the whole
+     * product. The wordmark is the right thing to put in a gap this one is.
+     */
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-ground" role="status">
+        <div className="motion-safe:animate-pulse">
+          <Wordmark />
+        </div>
+        <span className="sr-only">Loading Snapsher…</span>
+      </div>
+    );
   }
 
   if (!user) {

@@ -32,7 +32,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     if (!this.state.failed) return this.props.children;
 
     return (
-      <div className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-[#0c1014] px-6 text-center">
+      <div className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-ground px-6 text-center">
         <p className="text-sm text-white">Something broke on this screen.</p>
         <p className="text-xs text-neutral-400">
           Reloading usually fixes it. Nothing you shared has been lost.

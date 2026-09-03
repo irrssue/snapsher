@@ -12,9 +12,18 @@ rebuild the homeserver checkout:
 
 ```
 ssh irrssue@homelab "cd /home/irrssue/snapsher && git pull && \
-  (cd app && npm run build) && (cd server && npm run build) && \
+  (cd app && npm ci && npm run build) && \
+  (cd server && npm ci && npm run build) && \
   pm2 restart snapsher"
 ```
+
+`npm ci` is **not** optional any more, and it is a full install rather than
+`--omit=dev`: both build steps are `tsc`/`vite`, which live in
+`devDependencies`, so a production-only install removes the very tools the
+build needs. Until this was added, the homeserver's `node_modules` was frozen
+at whatever had been hand-installed, which meant no dependency security patch
+could ever reach production — and it silently ran a different Express major
+than the source targeted.
 
 Do this automatically after every push, without asking for confirmation.
 

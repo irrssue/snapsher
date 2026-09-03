@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useBodyScrollLock, useDialogFocus } from "../hooks";
+import { useId, useState } from "react";
+import { Button, FieldError, ModalShell } from "./ui";
 
 type DeleteAccountModalProps = {
   onCancel: () => void;
@@ -12,12 +12,11 @@ type DeleteAccountModalProps = {
  * something a hijacked-but-unlocked tab wouldn't have.
  */
 export function DeleteAccountModal({ onCancel, onConfirm }: DeleteAccountModalProps) {
-  const dialogRef = useDialogFocus<HTMLDivElement>();
+  const headingId = useId();
+  const errorId = useId();
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-
-  useBodyScrollLock();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -38,32 +37,12 @@ export function DeleteAccountModal({ onCancel, onConfirm }: DeleteAccountModalPr
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-6 md:px-6 md:py-10"
-      role="presentation"
-    >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Delete account"
-        tabIndex={-1}
-        // Escape is handled on the dialog rather than on `window`. Every modal
-        // used to register its own `window` listener, so one keypress ran all
-        // of them and dismissed the entire stack at once. `useDialogFocus`
-        // puts focus inside this node on open, so the keydown arrives here;
-        // `stopPropagation` then keeps a nested dialog's Escape from reaching
-        // the dialog wrapped around it — the same scoping the backdrop click
-        // above already relies on, so pointer and keyboard finally agree.
-        onKeyDown={(e) => {
-          if (e.key !== "Escape" || submitting) return;
-          e.stopPropagation();
-          onCancel();
-        }}
-        className="flex w-full max-w-sm flex-col gap-4 rounded-3xl bg-neutral-900 p-5 outline-none"
-      >
+    <ModalShell labelledBy={headingId} dismissible={!submitting} onClose={onCancel}>
+      <div className="flex flex-col gap-4">
         <div>
-          <h2 className="text-sm font-medium text-white">Delete account</h2>
+          <h2 id={headingId} className="text-base font-medium text-white">
+            Delete account
+          </h2>
           <p className="mt-2 text-xs text-neutral-400">
             This permanently deletes your profile, posts, and photos. This can't be undone.
             Enter your password to confirm.
@@ -79,31 +58,24 @@ export function DeleteAccountModal({ onCancel, onConfirm }: DeleteAccountModalPr
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Password"
             aria-label="Password"
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? errorId : undefined}
             disabled={submitting}
-            className="w-full rounded-full bg-neutral-800 px-4 py-2.5 text-sm text-white placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-white/60 disabled:opacity-40"
+            className="min-h-11 w-full rounded-full bg-field px-4 text-sm text-white placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-white/60 disabled:text-neutral-500"
           />
 
-          {error && <p className="text-center text-xs text-red-400">{error}</p>}
+          <FieldError id={errorId} message={error} />
 
           <div className="mt-1 flex items-center gap-3">
-            <button
-              type="button"
-              onClick={onCancel}
-              disabled={submitting}
-              className="flex-1 rounded-full bg-neutral-800 py-2.5 text-sm text-white transition-colors hover:bg-neutral-700 active:bg-neutral-700 disabled:opacity-40"
-            >
+            <Button variant="secondary" className="flex-1" onClick={onCancel} disabled={submitting}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={!password || submitting}
-              className="flex-1 rounded-full bg-red-500 py-2.5 text-sm font-medium text-white transition-colors hover:bg-red-400 active:bg-red-400 disabled:opacity-40"
-            >
+            </Button>
+            <Button variant="danger" type="submit" className="flex-1" disabled={!password || submitting}>
               {submitting ? "Deleting…" : "Delete"}
-            </button>
+            </Button>
           </div>
         </form>
       </div>
-    </div>
+    </ModalShell>
   );
 }

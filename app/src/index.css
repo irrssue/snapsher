@@ -1,5 +1,36 @@
 @import "tailwindcss";
 
+/* The app's own vocabulary, so a colour or a size has one name and one home.
+   Before this block every value was a raw Tailwind default or a one-off
+   arbitrary literal: `#0c1014` was written out in five files, and the photo
+   frame was `21.6rem` — a number off Tailwind's 4px scale that four components
+   each repeated by hand. Tailwind v4 reads this at build time, so `bg-ground`
+   and `rounded-shell` are real utilities, not indirection. */
+@theme {
+  /* The page itself. Named "ground" rather than "background" because several
+     surfaces sit on top of it and each needs its own name. */
+  --color-ground: #0c1014;
+  /* Dialogs, the comment panel — anything lifted off the ground. */
+  --color-surface: var(--color-neutral-900);
+  /* Inputs, chips, comment bubbles, and the placeholder behind a loading photo. */
+  --color-field: var(--color-neutral-800);
+
+  /* Two radii, which is what the app already used consistently: the larger for
+     modal shells and photos, the smaller for controls inside them. */
+  --radius-shell: var(--radius-3xl);
+  --radius-control: var(--radius-2xl);
+}
+
+/* Not in `@theme`: these are read through `h-(--size-photo)` rather than
+   generating a utility of their own, and `@theme` would emit an unused class
+   for every one of them. */
+:root {
+  /* The desktop photo frame. Was `21.6rem` in four files. */
+  --size-photo: 22rem;
+  /* The comment panel's height, matched to the photo plus its caption row. */
+  --size-comments: 26rem;
+}
+
 html,
 body,
 #root {
@@ -97,4 +128,29 @@ button,
 :where(button, [role="button"], a, summary):focus-visible {
   outline: 2px solid rgb(255 255 255 / 0.6);
   outline-offset: 2px;
+}
+
+/* The crop modal's zoom slider is the exception the rule above didn't cover:
+   inputs are excluded because each pairs `focus:outline-none` with a ring of
+   its own, but the range input has neither — just `accent-white`. It is also
+   the only keyboard path to zooming an avatar. */
+:where(input[type="range"]):focus-visible {
+  outline: 2px solid rgb(255 255 255 / 0.6);
+  outline-offset: 4px;
+}
+
+/* The one animation the app defines. Modals used to hard-cut in — seven
+   overlays, no transition anywhere — which on a product whose whole positioning
+   is "calm" read as unfinished rather than restrained. Kept to 150ms and paired
+   with `motion-safe:`, and the reduced-motion rule above neutralises it for
+   anyone who has asked for that. */
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }

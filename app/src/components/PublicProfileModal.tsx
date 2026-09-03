@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
-import { CloseIcon, PersonIcon } from "./icons";
-import { useBodyScrollLock, useDialogFocus } from "../hooks";
+import { useEffect, useId, useState } from "react";
+import { CloseIcon, LockIcon } from "./icons";
+import { Avatar, ErrorState, ModalShell, Skeleton } from "./ui";
 import { fetchUserProfile, fetchUserPosts, type PublicProfile } from "../api/friends";
 import { ApiError } from "../api/http";
 import { PostGrid } from "./PostGrid";
@@ -27,9 +27,7 @@ export function PublicProfileModal({ userId, onClose }: PublicProfileModalProps)
   const [error, setError] = useState<string | null>(null);
   /** The grid is friends-only and this viewer isn't one — a state, not a failure. */
   const [locked, setLocked] = useState(false);
-  const dialogRef = useDialogFocus<HTMLDivElement>();
-
-  useBodyScrollLock();
+  const headingId = useId();
 
   useEffect(() => {
     let active = true;
@@ -68,32 +66,8 @@ export function PublicProfileModal({ userId, onClose }: PublicProfileModalProps)
   }, [userId]);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-6 md:px-6 md:py-10"
-      onClick={onClose}
-      role="presentation"
-    >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Profile"
-        tabIndex={-1}
-        onClick={(e) => e.stopPropagation()}
-        // Escape is handled on the dialog rather than on `window`. Every modal
-        // used to register its own `window` listener, so one keypress ran all
-        // of them and dismissed the entire stack at once. `useDialogFocus`
-        // puts focus inside this node on open, so the keydown arrives here;
-        // `stopPropagation` then keeps a nested dialog's Escape from reaching
-        // the dialog wrapped around it — the same scoping the backdrop click
-        // above already relies on, so pointer and keyboard finally agree.
-        onKeyDown={(e) => {
-          if (e.key !== "Escape") return;
-          e.stopPropagation();
-          onClose();
-        }}
-        className="flex max-h-full w-full max-w-sm flex-col overflow-y-auto overscroll-contain rounded-3xl bg-neutral-900 p-5 outline-none"
-      >
+    <ModalShell labelledBy={headingId} onClose={onClose} className="flex flex-col">
+      <>
         <div className="flex shrink-0 items-center justify-end">
           <button
             type="button"
@@ -107,48 +81,55 @@ export function PublicProfileModal({ userId, onClose }: PublicProfileModalProps)
 
         <div className="flex flex-col items-center gap-4 pb-4">
           {error ? (
-            <p className="py-8 text-center text-sm text-red-400">{error}</p>
+            <ErrorState className="py-8" message={error} />
           ) : !profile ? (
             // The skeleton stands in for the avatar *and* the two text rows below
             // it. With only the circle the dialog was ~190px tall, and because the
             // backdrop centres it, the profile landing grew it in both directions
             // and slid the avatar upward out from under the pointer.
             <>
-              <div className="h-24 w-24 shrink-0 animate-pulse rounded-full bg-neutral-800" />
-              <div className="h-6 w-32 animate-pulse rounded-full bg-neutral-800" />
-              <div className="h-5 w-20 animate-pulse rounded-full bg-neutral-800" />
+              <Skeleton className="h-24 w-24 shrink-0" />
+              <Skeleton className="h-6 w-32" />
+              <Skeleton className="h-5 w-20" />
             </>
           ) : (
             <>
-              <span className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-300">
-                {profile.avatarUrl ? (
-                  <img
-                    src={profile.avatarUrl}
-                    alt=""
-                    loading="lazy"
-                    decoding="async"
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <PersonIcon className="h-14 w-14 text-neutral-500" />
-                )}
-              </span>
+              <Avatar url={profile.avatarUrl} size="xl" />
 
-              <span className="text-white">@{profile.username}</span>
+              <h2 id={headingId} className="break-words text-lg text-white">
+                @{profile.username}
+              </h2>
 
               <span className="text-sm text-neutral-300">{profile.postCount} posts</span>
 
               {locked ? (
-                <p className="break-words py-8 text-center text-sm text-neutral-400">
-                  Add @{profile.username} as a friend to see their photos.
-                </p>
+                /*
+                 * Not an error and not an empty grid. Photos are friends-only,
+                 * so this is the ordinary view of someone you haven't added —
+                 * and saying so is the difference between "there's nothing
+                 * here" and "there's something here you can't see yet", on a
+                 * profile whose post count directly above may read 40.
+                 */
+                <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
+                  <span className="flex h-11 w-11 items-center justify-center rounded-full bg-field">
+                    <LockIcon className="h-5 w-5 text-neutral-400" />
+                  </span>
+                  <p className="break-words text-sm text-neutral-300">
+                    Add @{profile.username} as a friend to see their photos.
+                  </p>
+                </div>
               ) : (
-                <PostGrid posts={posts} username={profile.username} avatarUrl={profile.avatarUrl} />
+                <PostGrid
+                  posts={posts}
+                  username={profile.username}
+                  avatarUrl={profile.avatarUrl}
+                  emptyLabel={`@${profile.username} hasn't shared a photo yet.`}
+                />
               )}
             </>
           )}
         </div>
-      </div>
-    </div>
+      </>
+    </ModalShell>
   );
 }

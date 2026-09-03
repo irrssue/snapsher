@@ -5,7 +5,8 @@ import { AvatarCropModal } from "./AvatarCropModal";
 import { ChangePasswordModal } from "./ChangePasswordModal";
 import { DeleteAccountModal } from "./DeleteAccountModal";
 import { SettingsModal } from "./SettingsModal";
-import { GearIcon, PersonIcon } from "./icons";
+import { GearIcon } from "./icons";
+import { Avatar, FieldError } from "./ui";
 import type { User } from "../types";
 
 type ProfileAvatarProps = {
@@ -32,7 +33,12 @@ export function ProfileAvatar({ user, onAvatarChange, onLogout, onAccountDeleted
     const file = e.target.files?.[0];
     // Reset so picking the same file twice still fires a change event.
     e.target.value = "";
+    // Cancelling the OS picker lands here with nothing. Settings is closed on
+    // *this* branch rather than when the picker opens, so backing out of the
+    // file dialog returns to the sheet the user was in instead of dumping them
+    // on the profile with no explanation of where it went.
     if (!file) return;
+    setShowSettings(false);
 
     setError(null);
     // `accept="image/*"` only filters the picker's own listing; a 400MB video
@@ -77,7 +83,6 @@ export function ProfileAvatar({ user, onAvatarChange, onLogout, onAccountDeleted
   }
 
   function handleEditPhoto() {
-    setShowSettings(false);
     fileInputRef.current?.click();
   }
 
@@ -110,21 +115,30 @@ export function ProfileAvatar({ user, onAvatarChange, onLogout, onAccountDeleted
 
   return (
     <div className="flex flex-col items-center gap-2">
-      <div className="group relative h-24 w-24 shrink-0">
-        <span className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-neutral-300">
-          {user.avatarUrl ? (
-            <img
-              src={user.avatarUrl}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              className="h-full w-full object-cover"
-            />
-          ) : (
-            <PersonIcon className="h-14 w-14 text-neutral-500" />
-          )}
-        </span>
+      <div className="relative h-24 w-24 shrink-0" aria-busy={uploading}>
+        <Avatar url={user.avatarUrl} size="xl" />
 
+        {/*
+         * `uploading` was set but never rendered: the cropper closed, a
+         * ~150KB upload went out, and the screen showed the old avatar with no
+         * spinner, no dimming and no disabled control — so on a slow connection
+         * the only available reading was "it didn't work", and people re-opened
+         * the picker.
+         */}
+        {uploading && (
+          <span
+            className="absolute inset-0 flex items-center justify-center rounded-full bg-black/60"
+            role="status"
+          >
+            <span className="h-6 w-6 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+            <span className="sr-only">Updating your photo…</span>
+          </span>
+        )}
+
+        {/*
+         * 44px of hit area around a 32px badge, the same negative-space trick
+         * the close buttons use — the gear was the smallest target in the app.
+         */}
         <button
           type="button"
           onClick={() => {
@@ -132,10 +146,13 @@ export function ProfileAvatar({ user, onAvatarChange, onLogout, onAccountDeleted
             setNotice(null);
             setShowSettings(true);
           }}
+          disabled={uploading}
           aria-label="Settings"
-          className="absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full bg-white text-black ring-2 ring-black transition-transform hover:scale-105 active:scale-95"
+          className="absolute -bottom-1.5 -right-1.5 flex h-11 w-11 items-center justify-center disabled:cursor-not-allowed"
         >
-          <GearIcon className="h-4 w-4" />
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black ring-2 ring-black transition-transform">
+            <GearIcon className="h-4 w-4" />
+          </span>
         </button>
       </div>
 
@@ -148,8 +165,12 @@ export function ProfileAvatar({ user, onAvatarChange, onLogout, onAccountDeleted
         className="hidden"
       />
 
-      {error && <p className="text-center text-xs text-red-400">{error}</p>}
-      {notice && <p className="text-center text-xs text-neutral-300">{notice}</p>}
+      {error && <FieldError message={error} />}
+      {notice && (
+        <p className="text-center text-xs text-neutral-300" role="status">
+          {notice}
+        </p>
+      )}
 
       {pickedImageUrl && (
         <AvatarCropModal

@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { PostSummary } from "../types";
-import { useBodyScrollLock, useDialogFocus } from "../hooks";
 import { deletePost } from "../api/posts";
 import { PostInteractions } from "./PostInteractions";
 import { CloseIcon } from "./icons";
+import { Button, FieldError, ModalShell } from "./ui";
 
 type PostPreviewModalProps = {
   post: PostSummary;
@@ -35,12 +35,10 @@ export function PostPreviewModal({
   onDeleted,
   onCountsChanged,
 }: PostPreviewModalProps) {
-  const dialogRef = useDialogFocus<HTMLDivElement>();
+  const headingId = useId();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-
-  useBodyScrollLock();
 
   const canDelete = post.isOwner && onDeleted !== undefined;
 
@@ -62,37 +60,18 @@ export function PostPreviewModal({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-6 md:px-6 md:py-10"
-      onClick={() => {
-        if (!deleting) onClose();
+    <ModalShell
+      labelledBy={headingId}
+      size="lg"
+      dismissible={!deleting}
+      onClose={() => {
+        // The confirmation is the innermost thing on screen while it's up, so
+        // backing out returns to the photo rather than closing it outright.
+        if (confirmingDelete) setConfirmingDelete(false);
+        else onClose();
       }}
-      role="presentation"
     >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Photo"
-        tabIndex={-1}
-        onClick={(e) => e.stopPropagation()}
-        // Escape is handled on the dialog rather than on `window`. Every modal
-        // used to register its own `window` listener, so one keypress ran all
-        // of them and dismissed the entire stack at once. `useDialogFocus`
-        // puts focus inside this node on open, so the keydown arrives here;
-        // `stopPropagation` then keeps a nested dialog's Escape from reaching
-        // the dialog wrapped around it — the same scoping the backdrop click
-        // above already relies on, so pointer and keyboard finally agree.
-        onKeyDown={(e) => {
-          if (e.key !== "Escape" || deleting) return;
-          e.stopPropagation();
-          // The confirmation is the innermost thing on screen while it's up, so
-          // Escape backs out of that first rather than closing the whole photo.
-          if (confirmingDelete) setConfirmingDelete(false);
-          else onClose();
-        }}
-        className="max-h-full w-full max-w-md overflow-y-auto overscroll-contain rounded-3xl bg-neutral-900 p-5 outline-none md:max-w-3xl md:p-8"
-      >
+      <>
         {confirmingDelete ? (
           /*
            * A confirmation panel rather than a second dialog on top of this
@@ -101,7 +80,9 @@ export function PostPreviewModal({
            */
           <div className="mx-auto flex max-w-sm flex-col gap-4">
             <div>
-              <h2 className="text-sm font-medium text-white">Delete this photo?</h2>
+              <h2 id={headingId} className="text-base font-medium text-white">
+                Delete this photo?
+              </h2>
               <p className="mt-2 text-xs text-neutral-400">
                 This removes the photo along with every like and comment on it, for
                 everyone. It can't be undone — and it doesn't give you your 12-hour
@@ -109,30 +90,23 @@ export function PostPreviewModal({
               </p>
             </div>
 
-            {deleteError && <p className="text-center text-xs text-red-400">{deleteError}</p>}
+            <FieldError message={deleteError} />
 
             <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => setConfirmingDelete(false)}
-                disabled={deleting}
-                className="flex-1 rounded-full bg-neutral-800 py-2.5 text-sm text-white transition-colors hover:bg-neutral-700 active:bg-neutral-700 disabled:opacity-40"
-              >
+              <Button variant="secondary" className="flex-1" onClick={() => setConfirmingDelete(false)} disabled={deleting}>
                 Keep it
-              </button>
-              <button
-                type="button"
-                onClick={handleDelete}
-                disabled={deleting}
-                className="flex-1 rounded-full bg-red-500 py-2.5 text-sm font-medium text-white transition-colors hover:bg-red-400 active:bg-red-400 disabled:opacity-40"
-              >
+              </Button>
+              <Button variant="danger" className="flex-1" onClick={handleDelete} disabled={deleting}>
                 {deleting ? "Deleting…" : "Delete"}
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
           <>
             <div className="flex items-center justify-between">
+              <h2 id={headingId} className="sr-only">
+                Photo shared by @{username}
+              </h2>
               {canDelete ? (
                 <button
                   type="button"
@@ -140,7 +114,7 @@ export function PostPreviewModal({
                     setDeleteError(null);
                     setConfirmingDelete(true);
                   }}
-                  className="-m-2 p-2 text-sm text-red-400 transition-colors hover:text-red-300 active:text-red-300"
+                  className="-m-3.5 p-3.5 text-sm text-red-400 transition-colors hover:text-red-300 active:text-red-300"
                 >
                   Delete
                 </button>
@@ -157,9 +131,7 @@ export function PostPreviewModal({
               </button>
             </div>
 
-            {deleteError && (
-              <p className="mt-2 text-center text-xs text-red-400">{deleteError}</p>
-            )}
+            {deleteError && <FieldError message={deleteError} />}
 
             <div className="mt-2 flex flex-col gap-3 md:flex-row md:items-center md:justify-center md:gap-10">
               <PostInteractions
@@ -175,17 +147,26 @@ export function PostPreviewModal({
                 onCountsChanged={onCountsChanged}
               />
 
-              <div className="flex aspect-square w-full items-center justify-center overflow-hidden rounded-3xl bg-neutral-300 md:aspect-auto md:h-[21.6rem] md:w-[21.6rem] md:shrink-0">
+              {/*
+               * `object-contain`, unlike the square-cropped grid this opens
+               * from. The upload path preserves the photo's aspect ratio, so a
+               * portrait shot was stored whole and then displayed as its middle
+               * third everywhere — including here, the one surface whose entire
+               * job is showing the photo properly. The grid stays cropped for
+               * its scanning rhythm; this is where you see what you actually
+               * shared.
+               */}
+              <div className="flex max-h-[60vh] w-full items-center justify-center overflow-hidden rounded-shell bg-field md:h-(--size-photo) md:w-(--size-photo) md:shrink-0">
                 <img
                   src={post.photoUrl}
                   alt={post.description ?? `Photo shared by @${username}`}
-                  className="h-full w-full object-cover"
+                  className="max-h-full max-w-full object-contain"
                 />
               </div>
             </div>
           </>
         )}
-      </div>
-    </div>
+      </>
+    </ModalShell>
   );
 }

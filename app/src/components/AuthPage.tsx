@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
+import { Wordmark } from "./ui";
 
 export type AuthStep = "credentials" | "username" | "code" | "forgot" | "reset";
 
@@ -41,7 +42,7 @@ function AuthInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
-      className="w-full rounded-full bg-neutral-800 px-4 py-2.5 text-sm text-white placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-white/60"
+      className="min-h-11 w-full rounded-full bg-field px-4 text-sm text-white placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-white/60"
     />
   );
 }
@@ -84,9 +85,20 @@ export function AuthPage({
   resendSubmitting,
 }: AuthPageProps) {
   const resendSecondsLeft = useCountdownSeconds(resendAt);
+  const errorId = useId();
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-[#0c1014] px-6">
+    <main className="flex min-h-dvh flex-col items-center justify-center gap-8 bg-ground px-6 py-10">
+      {/*
+       * The first screen of the entire product, and it used to carry no name,
+       * no tagline and no hint that one form served both signing in and signing
+       * up. A user could not tell what they were joining, and the one thing
+       * that makes Snapsher different was never stated before account creation.
+       */}
+      <h1>
+        <Wordmark />
+      </h1>
+
       {step === "credentials" ? (
         <form
           key="credentials"
@@ -107,6 +119,8 @@ export function AuthPage({
             aria-label="Email"
             autoComplete="email"
             defaultValue={email}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? errorId : undefined}
             required
           />
           <AuthInput
@@ -124,20 +138,28 @@ export function AuthPage({
             minLength={8}
           />
 
-          {error && <p className="text-center text-xs text-red-400">{error}</p>}
-          {notice && <p className="text-center text-xs text-neutral-300">{notice}</p>}
+          {error && (
+            <p id={errorId} role="alert" className="text-center text-xs text-red-400">
+              {error}
+            </p>
+          )}
+          {notice && (
+            <p role="status" className="text-center text-xs text-neutral-300">
+              {notice}
+            </p>
+          )}
 
           <button
             type="submit"
             disabled={submitting}
-            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-40"
+            className="mt-4 flex min-h-11 w-full items-center justify-center rounded-full bg-white px-4 text-sm font-medium text-black transition-colors hover:bg-neutral-200 active:bg-neutral-200 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-300"
           >
             {submitting ? "Please wait…" : "Continue"}
           </button>
           <button
             type="button"
             onClick={onForgotPassword}
-            className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
+            className="min-h-11 px-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
           >
             Forgot password?
           </button>
@@ -174,19 +196,23 @@ export function AuthPage({
             maxLength={20}
           />
 
-          {error && <p className="text-center text-xs text-red-400">{error}</p>}
+          {error && (
+            <p id={errorId} role="alert" className="text-center text-xs text-red-400">
+              {error}
+            </p>
+          )}
 
           <button
             type="submit"
             disabled={submitting}
-            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-40"
+            className="mt-4 flex min-h-11 w-full items-center justify-center rounded-full bg-white px-4 text-sm font-medium text-black transition-colors hover:bg-neutral-200 active:bg-neutral-200 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-300"
           >
             {submitting ? "Please wait…" : "Sign up"}
           </button>
           <button
             type="button"
             onClick={onBack}
-            className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
+            className="min-h-11 px-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
           >
             ← Use a different email
           </button>
@@ -227,12 +253,16 @@ export function AuthPage({
             maxLength={6}
           />
 
-          {error && <p className="text-center text-xs text-red-400">{error}</p>}
+          {error && (
+            <p id={errorId} role="alert" className="text-center text-xs text-red-400">
+              {error}
+            </p>
+          )}
 
           <button
             type="submit"
             disabled={submitting}
-            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-40"
+            className="mt-4 flex min-h-11 w-full items-center justify-center rounded-full bg-white px-4 text-sm font-medium text-black transition-colors hover:bg-neutral-200 active:bg-neutral-200 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-300"
           >
             {submitting ? "Please wait…" : "Verify"}
           </button>
@@ -240,14 +270,14 @@ export function AuthPage({
             type="button"
             onClick={onResendCode}
             disabled={resendSecondsLeft > 0 || resendSubmitting}
-            className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white disabled:opacity-40"
+            className="min-h-11 px-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white disabled:text-neutral-600"
           >
             {resendSecondsLeft > 0 ? `Resend code in ${resendSecondsLeft}s` : "Resend code"}
           </button>
           <button
             type="button"
             onClick={onBack}
-            className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
+            className="min-h-11 px-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
           >
             ← Start over
           </button>
@@ -272,22 +302,28 @@ export function AuthPage({
             aria-label="Email"
             autoComplete="email"
             defaultValue={email}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? errorId : undefined}
             required
           />
 
-          {error && <p className="text-center text-xs text-red-400">{error}</p>}
+          {error && (
+            <p id={errorId} role="alert" className="text-center text-xs text-red-400">
+              {error}
+            </p>
+          )}
 
           <button
             type="submit"
             disabled={submitting}
-            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-40"
+            className="mt-4 flex min-h-11 w-full items-center justify-center rounded-full bg-white px-4 text-sm font-medium text-black transition-colors hover:bg-neutral-200 active:bg-neutral-200 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-300"
           >
             {submitting ? "Please wait…" : "Send code"}
           </button>
           <button
             type="button"
             onClick={onBack}
-            className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
+            className="min-h-11 px-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
           >
             ← Back to sign in
           </button>
@@ -341,31 +377,35 @@ export function AuthPage({
             minLength={8}
           />
 
-          {error && <p className="text-center text-xs text-red-400">{error}</p>}
+          {error && (
+            <p id={errorId} role="alert" className="text-center text-xs text-red-400">
+              {error}
+            </p>
+          )}
 
           <button
             type="submit"
             disabled={submitting}
-            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-40"
+            className="mt-4 flex min-h-11 w-full items-center justify-center rounded-full bg-white px-4 text-sm font-medium text-black transition-colors hover:bg-neutral-200 active:bg-neutral-200 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-300"
           >
             {submitting ? "Please wait…" : "Reset password"}
           </button>
           <button
             type="button"
             onClick={onForgotPassword}
-            className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
+            className="min-h-11 px-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
           >
             Send another code
           </button>
           <button
             type="button"
             onClick={onBack}
-            className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
+            className="min-h-11 px-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
           >
             ← Back to sign in
           </button>
         </form>
       )}
-    </div>
+    </main>
   );
 }

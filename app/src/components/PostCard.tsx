@@ -31,7 +31,7 @@ export function PostCard({
         onCountsChanged={onCountsChanged}
       />
 
-      <div className="aspect-square w-full overflow-hidden rounded-3xl bg-neutral-300 md:aspect-auto md:h-[21.6rem] md:w-[21.6rem] md:shrink-0">
+      <div className="aspect-square w-full overflow-hidden rounded-shell bg-field md:aspect-auto md:h-(--size-photo) md:w-(--size-photo) md:shrink-0">
         <img
           src={post.photoUrl}
           alt={post.description ?? `Photo shared by @${post.username}`}

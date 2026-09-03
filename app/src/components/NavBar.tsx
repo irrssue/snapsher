@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 import { HomeIcon, PlusIcon, SearchIcon, PersonIcon } from "./icons";
+import { formatRemaining, useNow } from "../time";
 
 type View = "home" | "friends" | "profile";
 
@@ -7,14 +8,41 @@ type NavBarProps = {
   active: View;
   onChange: (view: View) => void;
   onAddPost?: () => void;
+  /** `undefined`/`null` mean the quota isn't known — see `windowClosed` below. */
+  nextAllowedAt?: number | null;
+  clockOffset?: number;
 };
+
+/** The window the server enforces, used only to draw the ring. */
+const WINDOW_MS = 12 * 60 * 60 * 1000;
+const RING_RADIUS = 19;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
 const TABS: { key: View; label: string; icon: (className: string) => ReactElement }[] = [
   { key: "home", label: "Home", icon: (c) => <HomeIcon className={c} /> },
   { key: "friends", label: "Search", icon: (c) => <SearchIcon className={c} /> },
 ];
 
-export function NavBar({ active, onChange, onAddPost }: NavBarProps) {
+export function NavBar({
+  active,
+  onChange,
+  onAddPost,
+  nextAllowedAt,
+  clockOffset = 0,
+}: NavBarProps) {
+  /**
+   * Only a *known* closed window disables the control. An unread quota — the
+   * call still in flight, or failed — leaves the button live: refusing to open
+   * compose because we couldn't check would turn one failed request into an
+   * app that looks broken, and the server rejects an over-quota post anyway.
+   */
+  const windowClosed = typeof nextAllowedAt === "number";
+  const now =
+    useNow(1000, windowClosed ? nextAllowedAt - clockOffset : null) + clockOffset;
+  const remaining = windowClosed ? nextAllowedAt - now : 0;
+  const locked = windowClosed && remaining > 0;
+  const elapsed = locked ? Math.min(1, Math.max(0, (WINDOW_MS - remaining) / WINDOW_MS)) : 1;
+
   return (
     // Notched iPhones reserve a band at the bottom for the home indicator,
     // and it swallows taps — the pill has to clear it, not sit in it.
@@ -35,12 +63,39 @@ export function NavBar({ active, onChange, onAddPost }: NavBarProps) {
             {tab.icon("h-6 w-6")}
           </button>
         ))}
+        {/*
+         * The window, shown before it costs anything. The button used to be
+         * permanently enabled, so the way people learned about the 12-hour rule
+         * was: tap +, open the picker, choose a photo, and only then read that
+         * Share is greyed out for another seven hours. A ring that fills as the
+         * wait is served says the same thing up front, and turns the constraint
+         * from a wall into the thing the product is actually about.
+         */}
         <button
           type="button"
-          aria-label="Add post"
+          aria-label={
+            locked ? `Next photo in ${formatRemaining(remaining)}` : "Share a photo"
+          }
           onClick={onAddPost}
-          className="flex h-11 w-11 items-center justify-center rounded-full text-neutral-300 transition-colors hover:text-white active:text-white"
+          disabled={locked}
+          className="relative flex h-11 w-11 items-center justify-center rounded-full text-neutral-300 transition-colors hover:text-white active:text-white disabled:cursor-not-allowed disabled:text-neutral-500"
         >
+          {locked && (
+            <svg viewBox="0 0 44 44" className="absolute inset-0 h-full w-full -rotate-90" aria-hidden="true">
+              <circle
+                cx="22"
+                cy="22"
+                r={RING_RADIUS}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeDasharray={RING_CIRCUMFERENCE}
+                strokeDashoffset={RING_CIRCUMFERENCE * (1 - elapsed)}
+                className="text-neutral-400 transition-[stroke-dashoffset] duration-1000 ease-linear"
+              />
+            </svg>
+          )}
           <PlusIcon className="h-6 w-6" />
         </button>
       </div>

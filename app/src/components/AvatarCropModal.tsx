@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckIcon, CloseIcon } from "./icons";
-import { useBodyScrollLock, useDialogFocus } from "../hooks";
+import { ModalShell } from "./ui";
 import { TOO_MANY_PIXELS_MESSAGE, withinPixelBudget } from "../images";
 
 /** Largest on-screen size of the square crop viewport. */
@@ -71,7 +71,6 @@ type AvatarCropModalProps = {
 export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropModalProps) {
   const imgRef = useRef<HTMLImageElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
-  const dialogRef = useDialogFocus<HTMLDivElement>();
   const [viewport, setViewport] = useState(measureViewport);
   const [frame, setFrame] = useState<Frame | null>(null);
   const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(null);
@@ -82,8 +81,6 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
   const dragState = useRef<{ pointerId: number; startX: number; startY: number; frame: Frame } | null>(
     null,
   );
-
-  useBodyScrollLock();
 
   /**
    * Re-measures the square and re-fits the photo inside it — the two always
@@ -291,33 +288,15 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
   const maxScale = minScale * MAX_ZOOM_MULTIPLIER;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/80 px-4 py-6"
-      role="presentation"
+    /* The dialog is taller than a phone in landscape, and centring it in a
+       fixed layer overflows at both ends at once — which put Cancel and
+       Confirm off-screen with no way to scroll to them. The shell scrolls. */
+    <ModalShell
+      label="Position your profile photo"
+      dismissible={!exporting}
+      onClose={onCancel}
+      className="flex flex-col items-center gap-5"
     >
-      {/* The dialog is taller than a phone in landscape, and centring it in a
-          fixed layer overflows at both ends at once — which put Cancel and
-          Confirm off-screen with no way to scroll to them. */}
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Position your profile photo"
-        tabIndex={-1}
-        // Escape is handled on the dialog rather than on `window`. Every modal
-        // used to register its own `window` listener, so one keypress ran all
-        // of them and dismissed the entire stack at once. `useDialogFocus`
-        // puts focus inside this node on open, so the keydown arrives here;
-        // `stopPropagation` then keeps a nested dialog's Escape from reaching
-        // the dialog wrapped around it — the same scoping the backdrop click
-        // above already relies on, so pointer and keyboard finally agree.
-        onKeyDown={(e) => {
-          if (e.key !== "Escape" || exporting) return;
-          e.stopPropagation();
-          onCancel();
-        }}
-        className="flex max-h-full w-full max-w-sm flex-col items-center gap-5 overflow-y-auto overscroll-contain rounded-3xl bg-neutral-900 p-5 outline-none"
-      >
         <p className="shrink-0 text-xs uppercase tracking-widest text-neutral-400">
           Drag to reposition
         </p>
@@ -376,7 +355,11 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
           />
         </div>
 
-        {loadError && <p className="shrink-0 text-center text-xs text-red-400">{loadError}</p>}
+        {loadError && (
+          <p className="shrink-0 text-center text-xs text-red-400" role="alert">
+            {loadError}
+          </p>
+        )}
 
         <input
           type="range"
@@ -411,7 +394,6 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
             <CheckIcon className="h-5 w-5" />
           </button>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }
