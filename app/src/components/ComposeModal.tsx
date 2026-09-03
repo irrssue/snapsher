@@ -1,6 +1,6 @@
 import { useId, useRef, useState } from "react";
 import { readPhotoAsDataUrl } from "../api/posts";
-import { ImageRejected } from "../images";
+import { ImageRejected, PICKER_ACCEPT } from "../images";
 import { formatRemaining, useNow } from "../time";
 import { CommentIcon, HeartIcon, PlusIcon } from "./icons";
 import { Avatar, Button, FieldError, ModalShell } from "./ui";
@@ -192,7 +192,7 @@ export function ComposeModal({
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
+          accept={PICKER_ACCEPT}
           onChange={handleFileChange}
           className="hidden"
         />

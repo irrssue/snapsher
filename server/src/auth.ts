@@ -38,7 +38,7 @@ import {
   upsertPendingSignup,
 } from "./verificationStore.js";
 import {
-  carriesExifMetadata,
+  stripMetadata,
   EXTENSION_BY_FORMAT,
   PHOTO_DATA_URL_RE,
   sniffFormat,
@@ -1017,14 +1017,15 @@ authRouter.put(
     if (sniffFormat(bytes) !== declaredFormat) {
       return res.status(400).json({ error: "That file isn't a supported image." });
     }
-    // Same two header-only checks as a post's photo, and the same 400 — see
-    // the comment in posts.ts and the reasoning in images.ts. The blast radius
-    // is larger here: an avatar renders in the feed, on profiles, in the likers
-    // popover and beside every comment.
-    if (
-      !withinPixelBudget(bytes, declaredFormat as ImageFormat) ||
-      carriesExifMetadata(bytes, declaredFormat as ImageFormat)
-    ) {
+    // Same pixel-budget refusal and same metadata strip as a post's photo —
+    // see the comments in posts.ts and the reasoning in images.ts. The blast
+    // radius is larger here: an avatar renders in the feed, on profiles, in the
+    // likers popover and beside every comment.
+    if (!withinPixelBudget(bytes, declaredFormat as ImageFormat)) {
+      return res.status(400).json({ error: "That file isn't a supported image." });
+    }
+    const stored = stripMetadata(bytes, declaredFormat as ImageFormat);
+    if (!stored) {
       return res.status(400).json({ error: "That file isn't a supported image." });
     }
 
@@ -1040,7 +1041,7 @@ authRouter.put(
     // Written asynchronously: a synchronous write of up to 4 MB blocks the
     // event loop for its whole duration, which stalls every other request in
     // flight — including the feed loads of everyone else on the server.
-    await fs.promises.writeFile(avatarPath, bytes, { mode: 0o640 });
+    await fs.promises.writeFile(avatarPath, stored, { mode: 0o640 });
 
     try {
       db.prepare("UPDATE users SET avatar_file = ? WHERE id = ?").run(avatarFile, user.id);

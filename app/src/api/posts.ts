@@ -3,6 +3,7 @@ import {
   assertPickableImage,
   ImageRejected,
   TOO_MANY_PIXELS_MESSAGE,
+  undecodableMessage,
   withinPixelBudget,
 } from "../images";
 import { api, expectArray, expectBoolean, expectNumber, expectObject } from "./http";
@@ -102,7 +103,20 @@ const JPEG_QUALITY = 0.85;
 export async function readPhotoAsDataUrl(file: File): Promise<string> {
   assertPickableImage(file);
 
-  const bitmap = await createImageBitmap(file);
+  let bitmap: ImageBitmap;
+  try {
+    // `from-image` rather than the default: a photo held sideways records its
+    // rotation as an Exif tag instead of in the pixels, and every browser that
+    // ignores the tag here would upload it lying on its side — permanently,
+    // since the canvas re-encode below is what the server stores and the tag
+    // does not survive it.
+    bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch {
+    // The one check no amount of header-reading can do in advance: whether
+    // *this* browser has a decoder for these bytes. HEIC is the case that
+    // actually comes up, and it gets a message that says so.
+    throw new ImageRejected(undecodableMessage(file));
+  }
   // The dimensions aren't knowable until here, and the canvas below is a second
   // allocation the same size as the bitmap — so this is the last point before
   // the memory is actually spent.

@@ -57,6 +57,13 @@ function clampFrame(
 
 type AvatarCropModalProps = {
   imageUrl: string;
+  /**
+   * What to say if the browser turns out not to have a decoder for these bytes.
+   * The cropper only ever sees an object URL, which says nothing about the file
+   * behind it — so the caller, which does hold the `File`, names the format and
+   * the way out (see `undecodableMessage`).
+   */
+  undecodableMessage: string;
   onCancel: () => void;
   onConfirm: (photo: string) => void;
 };
@@ -68,7 +75,12 @@ type AvatarCropModalProps = {
  * well under the server's size limit regardless of how large the original
  * photo was.
  */
-export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropModalProps) {
+export function AvatarCropModal({
+  imageUrl,
+  undecodableMessage,
+  onCancel,
+  onConfirm,
+}: AvatarCropModalProps) {
   const imgRef = useRef<HTMLImageElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState(measureViewport);
@@ -317,7 +329,7 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
             onLoad={handleImageLoad}
             // A file the browser can't decode would otherwise leave a hidden
             // image and a disabled Confirm with nothing explaining why.
-            onError={() => setLoadError("Couldn't read that photo. Try a different one.")}
+            onError={() => setLoadError(undecodableMessage)}
             draggable={false}
             className="absolute left-0 top-0 max-w-none origin-top-left cursor-grab active:cursor-grabbing"
             style={

@@ -20,7 +20,7 @@ import {
 import { likersFor, toggleLike, LikeError } from "./likesStore.js";
 import { addComment, CommentError, deleteComment, listComments } from "./commentsStore.js";
 import {
-  carriesExifMetadata,
+  stripMetadata,
   CONTENT_TYPE_BY_EXTENSION,
   EXTENSION_BY_FORMAT,
   PHOTO_DATA_URL_RE,
@@ -130,20 +130,22 @@ postsRouter.post(
       return res.status(400).json({ error: "That file isn't a supported image." });
     }
 
-    // Two header-only checks, both answering with the same 400 as the
-    // magic-byte check above so a rejection still discloses nothing:
-    //   - the byte cap says nothing about pixel count, so a small file that
-    //     declares an enormous frame passes everything above and then knocks
-    //     over every browser that later loads this profile. An unreadable
-    //     header is refused too — a size that can't be read can't be bounded.
-    //   - bytes still carrying an Exif block did not come from our client,
-    //     which re-encodes through a <canvas>; storing them re-serves the
-    //     uploader's GPS coordinates to everyone who can see the photo.
-    // Both are explained in full in images.ts.
-    if (
-      !withinPixelBudget(bytes, declaredFormat as ImageFormat) ||
-      carriesExifMetadata(bytes, declaredFormat as ImageFormat)
-    ) {
+    // The byte cap says nothing about pixel count, so a small file that
+    // declares an enormous frame passes everything above and then knocks over
+    // every browser that later loads this profile. An unreadable header is
+    // refused on the same 400 as the magic-byte check above, so a rejection
+    // still discloses nothing — and a size that can't be read can't be bounded.
+    if (!withinPixelBudget(bytes, declaredFormat as ImageFormat)) {
+      return res.status(400).json({ error: "That file isn't a supported image." });
+    }
+
+    // What actually reaches the disk is the upload with its Exif, XMP and
+    // comment blocks removed: a photo carries the coordinates it was taken at,
+    // and storing it verbatim would re-serve them to everyone who can see it.
+    // `null` means the file's structure couldn't be walked, so its metadata
+    // can't be accounted for. Both are explained in full in images.ts.
+    const stored = stripMetadata(bytes, declaredFormat as ImageFormat);
+    if (!stored) {
       return res.status(400).json({ error: "That file isn't a supported image." });
     }
 
@@ -152,7 +154,7 @@ postsRouter.post(
     // Written asynchronously: a synchronous write of up to 8 MB blocks the
     // event loop for its whole duration, which stalls every other request in
     // flight — including the feed loads of everyone else on the server.
-    await fs.promises.writeFile(photoPath, bytes, { mode: 0o640 });
+    await fs.promises.writeFile(photoPath, stored, { mode: 0o640 });
 
     try {
       const created = createPostFor(actor, {

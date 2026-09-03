@@ -100,8 +100,14 @@ function walkJpegSegments<T>(
       i += 2;
       continue;
     }
-    // Start of scan, or end of image: no more headers follow.
-    if (marker === 0xda || marker === 0xd9) return null;
+    // Start of scan, or end of image: no more headers follow. Visited anyway,
+    // with a zero length, so a caller that needs to know *where* the header
+    // chain ended cleanly can say so — every other visitor ignores the marker
+    // and still gets the `null` that ending here has always produced.
+    if (marker === 0xda || marker === 0xd9) {
+      const end = visit(marker, i, 0);
+      return end === undefined ? null : end;
+    }
 
     const length = bytes.readUInt16BE(i + 2);
     // A length below 2 doesn't even cover its own field, and would walk this
@@ -166,10 +172,10 @@ function webpDimensions(bytes: Buffer): ImageDimensions | null {
 /**
  * Reads the width and height an image declares in its own header bytes.
  *
- * Header-only by necessity: there is no image library here and none can be
- * added, since the homeserver deploy never runs `npm install`. Reading the
- * handful of bytes that carry the dimensions is enough to refuse a
- * decompression bomb before it is ever written to disk.
+ * Header-only on purpose: reading the handful of bytes that carry the
+ * dimensions is enough to refuse a decompression bomb before it is ever
+ * written to disk, and it costs no decoder — so the check itself can't be
+ * turned into the very exhaustion it exists to prevent.
  *
  * `null` means the header could not be read, which callers treat as a
  * rejection — a size that can't be read is a size that can't be bounded.
@@ -187,132 +193,210 @@ export function withinPixelBudget(bytes: Buffer, format: ImageFormat): boolean {
   return size.width > 0 && size.height > 0 && size.width * size.height <= MAX_PIXELS;
 }
 
-/** True when a JPEG carries an APP1 `Exif\0\0` block. */
-function jpegCarriesMetadata(bytes: Buffer): boolean {
-  const EXIF_SIGNATURE = "Exif\0\0";
-  return (
-    walkJpegSegments(bytes, (marker, segmentAt, length) => {
-      if (marker !== 0xe1) return undefined;
-      // Payload starts after the marker and its two length bytes; the length
-      // counts itself, so the payload is `length - 2` bytes long.
-      const payloadAt = segmentAt + 4;
-      if (length - 2 < EXIF_SIGNATURE.length) return undefined;
-      if (payloadAt + EXIF_SIGNATURE.length > bytes.length) return undefined;
-      return bytes.subarray(payloadAt, payloadAt + EXIF_SIGNATURE.length).toString("latin1") ===
-        EXIF_SIGNATURE
-        ? true
-        : undefined;
-    }) === true
-  );
+/**
+ * JPEG segments that are dropped from every upload before it is stored.
+ *
+ * APP1 is where both Exif and XMP live — GPS coordinates, camera serial,
+ * original capture time, and in XMP's case the author's name. APP13 is
+ * Photoshop's resource block, which is where IPTC credit and location fields
+ * end up. APP3 through APP12, APP15 and COM are the long tail: maker notes,
+ * Ducky/Picture Info, JUMBF, and free-text comments. None of them are needed to
+ * decode the image.
+ *
+ * Three neighbours are deliberately kept, because dropping them changes how the
+ * pixels are *read*: APP0 (JFIF density), APP14 (Adobe's colour transform,
+ * without which a YCCK/CMYK file decodes with inverted colour) and an APP2 that
+ * holds an ICC profile. An APP2 that holds anything else — MPF, the multi-frame
+ * index an iPhone writes alongside a portrait shot, which carries its own
+ * embedded thumbnails — is dropped like the rest.
+ */
+const ICC_PROFILE_SIGNATURE = "ICC_PROFILE\0";
+
+function isDroppableJpegSegment(bytes: Buffer, marker: number, segmentAt: number): boolean {
+  if (marker === 0xfe) return true; // COM
+  if (marker === 0xe0 || marker === 0xee) return false; // APP0 JFIF, APP14 Adobe
+  if (marker === 0xe2) {
+    // Payload starts after the marker and its two length bytes.
+    const payloadAt = segmentAt + 4;
+    return (
+      bytes.subarray(payloadAt, payloadAt + ICC_PROFILE_SIGNATURE.length).toString("latin1") !==
+      ICC_PROFILE_SIGNATURE
+    );
+  }
+  return marker >= 0xe1 && marker <= 0xef; // every other APPn
+}
+
+function stripJpegMetadata(bytes: Buffer): Buffer | null {
+  // SOI, then whichever header segments survive, then the scan verbatim.
+  const kept: Buffer[] = [bytes.subarray(0, 2)];
+  let scanAt = -1;
+  let malformed = false;
+
+  walkJpegSegments<true>(bytes, (marker, segmentAt, length) => {
+    if (marker === 0xda || marker === 0xd9) {
+      scanAt = segmentAt;
+      return true;
+    }
+    // The walk trusts a declared length far enough to step over it; copying it
+    // out means the bytes have to actually be there.
+    const segmentEnd = segmentAt + 2 + length;
+    if (segmentEnd > bytes.length) {
+      malformed = true;
+      return true;
+    }
+    if (!isDroppableJpegSegment(bytes, marker, segmentAt)) {
+      kept.push(bytes.subarray(segmentAt, segmentEnd));
+    }
+    return undefined;
+  });
+
+  // Never reaching a scan means the chain didn't describe itself, and a chain
+  // that can't be walked is one whose metadata can't be accounted for.
+  if (malformed || scanAt < 0) return null;
+  kept.push(bytes.subarray(scanAt));
+  return Buffer.concat(kept);
 }
 
 /**
- * Chunk types that carry photographer-identifying data in a PNG.
+ * Chunk types dropped from every PNG upload.
  *
  * `eXIf` is a verbatim Exif block — GPS, camera serial, original timestamp.
  * `tEXt`/`zTXt`/`iTXt` are the generic text chunks, which is where exporters
  * park "Software", "Author", "Comment" and, from a phone, frequently the whole
- * Exif set transcoded into key/value pairs. All four are refused rather than
- * inspected: reading *which* keys a text chunk holds would mean parsing
- * attacker-supplied (and, for `zTXt`/`iTXt`, zlib-compressed) content to decide
- * whether to keep it, and nothing the client produces has any of these chunks
- * at all — a `<canvas>` PNG export carries IHDR, IDAT and IEND.
+ * Exif set transcoded into key/value pairs. `tIME` is the last-modification
+ * time. All five are dropped wholesale rather than inspected: reading *which*
+ * keys a text chunk holds would mean parsing attacker-supplied (and, for
+ * `zTXt`/`iTXt`, zlib-compressed) content to decide whether to keep it.
+ *
+ * `iCCP` is not on the list — like a JPEG's ICC APP2, it describes how to read
+ * the colour rather than who took the photo.
  */
-const PNG_METADATA_CHUNKS = new Set(["eXIf", "tEXt", "zTXt", "iTXt"]);
+const PNG_METADATA_CHUNKS = new Set(["eXIf", "tEXt", "zTXt", "iTXt", "tIME"]);
 
 /**
- * Walks a PNG's chunk chain. Each chunk is a 4-byte big-endian length, a 4-byte
- * type, that many bytes of payload, then a 4-byte CRC — self-describing the
- * same way JPEG segments are, so this reads only headers.
+ * Walks a PNG's chunk chain, copying through everything that isn't metadata.
+ * Each chunk is a 4-byte big-endian length, a 4-byte type, that many bytes of
+ * payload, then a 4-byte CRC — self-describing the same way JPEG segments are,
+ * so this reads only headers and never touches compressed pixel data. Dropping
+ * a whole chunk needs no CRC recomputation; every surviving chunk keeps the one
+ * it arrived with.
  *
  * The length is `uint32`, so a crafted file can declare a chunk longer than the
- * buffer or long enough to overflow the cursor; both end the walk rather than
- * being trusted. A chain that can't be walked is treated as carrying metadata,
- * on the same rule as `dimensionsOf`: bytes that can't be checked can't be
- * cleared.
+ * buffer; that ends the walk as `null` rather than being trusted, on the same
+ * rule as `dimensionsOf` — bytes that can't be read can't be cleared.
  */
-function pngCarriesMetadata(bytes: Buffer): boolean {
+function stripPngMetadata(bytes: Buffer): Buffer | null {
+  const kept: Buffer[] = [bytes.subarray(0, 8)]; // signature
   // 8-byte signature, then the first chunk.
   let i = 8;
   while (i + 8 <= bytes.length) {
-    const length = bytes.readUInt32BE(i);
     const type = bytes.subarray(i + 4, i + 8).toString("latin1");
-    if (PNG_METADATA_CHUNKS.has(type)) return true;
+    // 12 = the length field, the type, and the trailing CRC.
+    const next = i + 12 + bytes.readUInt32BE(i);
+    if (next > bytes.length) return null;
+
+    if (!PNG_METADATA_CHUNKS.has(type)) kept.push(bytes.subarray(i, next));
     // IEND is the only clean way out of this loop. IDAT is *not* a stopping
     // point: an `eXIf` chunk placed after the image data is legal, and a walk
     // that stopped at the pixels would miss exactly the file worth catching.
-    // Each IDAT is skipped by its declared length like any other chunk.
-    if (type === "IEND") return false;
-    // 12 = the length field, the type, and the trailing CRC. A chunk claiming
-    // to run past the buffer is a chain that doesn't describe itself, and so is
-    // one that never reaches IEND — both are refused, on the same rule as an
-    // unreadable dimension header: bytes that can't be checked can't be
-    // cleared.
-    const next = i + 12 + length;
-    if (next > bytes.length) return true;
+    if (type === "IEND") return Buffer.concat(kept);
     i = next;
   }
-  return true;
+  return null;
 }
 
 /**
- * Chunk fourccs that carry metadata in a WebP: a verbatim Exif block, and XMP,
+ * Chunk fourccs dropped from every WebP upload: a verbatim Exif block, and XMP,
  * which holds the same GPS and camera fields in RDF/XML.
  */
 const WEBP_METADATA_CHUNKS = new Set(["EXIF", "XMP "]);
 
+/** VP8X's flag bits for "an Exif chunk follows" and "an XMP chunk follows". */
+const VP8X_EXIF_FLAG = 0x08;
+const VP8X_XMP_FLAG = 0x04;
+
 /**
- * Walks a RIFF chunk chain. Structure: "RIFF", a 4-byte little-endian file
- * size, "WEBP", then chunks of a 4-byte fourcc, a 4-byte little-endian payload
- * size, the payload, and a pad byte when that size is odd.
+ * Walks a RIFF chunk chain, copying through everything that isn't metadata.
+ * Structure: "RIFF", a 4-byte little-endian file size, "WEBP", then chunks of a
+ * 4-byte fourcc, a 4-byte little-endian payload size, the payload, and a pad
+ * byte when that size is odd.
  *
- * Only VP8X-flagged files can carry EXIF/XMP at all, but the flag is not
- * consulted — a file that lies about its flags and appends the chunk anyway is
- * exactly the file this is looking for. Same failure rule as the PNG walk: an
- * unwalkable chain counts as carrying metadata.
+ * Only VP8X-flagged files may carry EXIF/XMP at all, but the flag is not
+ * consulted on the way in — a file that lies about its flags and appends the
+ * chunk anyway is exactly the file worth catching. On the way out the flags do
+ * matter: a VP8X still advertising an Exif chunk that no longer exists is a
+ * file some decoders reject outright, so the two bits are cleared and the RIFF
+ * size rewritten to match what was actually kept.
  */
-function webpCarriesMetadata(bytes: Buffer): boolean {
+function stripWebpMetadata(bytes: Buffer): Buffer | null {
+  const kept: Buffer[] = [];
+  let vp8xIndex = -1;
+  let dropped = false;
   let i = 12;
+
   while (i + 8 <= bytes.length) {
     const fourcc = bytes.subarray(i, i + 4).toString("latin1");
-    if (WEBP_METADATA_CHUNKS.has(fourcc)) return true;
-
     const size = bytes.readUInt32LE(i + 4);
     const payloadEnd = i + 8 + size;
-    if (payloadEnd > bytes.length) return true;
-
+    if (payloadEnd > bytes.length) return null;
     // RIFF pads an odd-sized payload to an even boundary, but not every encoder
     // writes that byte on the *final* chunk — so landing on (or one past) the
-    // end here is the chain finishing cleanly, not a truncation. The client's
-    // single-chunk `VP8 ` output from `<canvas>` exits exactly here.
+    // end is the chain finishing cleanly, not a truncation.
     const next = payloadEnd + (size % 2);
-    if (next >= bytes.length) return false;
+
+    if (WEBP_METADATA_CHUNKS.has(fourcc)) {
+      dropped = true;
+    } else {
+      if (fourcc === "VP8X") vp8xIndex = kept.length;
+      kept.push(bytes.subarray(i, Math.min(next, bytes.length)));
+    }
+
+    if (next >= bytes.length) {
+      // Nothing to rewrite when nothing went away — and rebuilding a file we
+      // did not change is a chance to get it subtly wrong for no gain.
+      if (!dropped) return bytes;
+      if (vp8xIndex >= 0) {
+        // The flags are the first byte of VP8X's payload: 8 bytes of chunk
+        // header, then the flags.
+        const vp8x = Buffer.from(kept[vp8xIndex]);
+        vp8x[8] &= ~(VP8X_EXIF_FLAG | VP8X_XMP_FLAG);
+        kept[vp8xIndex] = vp8x;
+      }
+      const body = Buffer.concat(kept);
+      const header = Buffer.alloc(12);
+      header.write("RIFF", 0, "latin1");
+      // The RIFF size counts everything after the size field itself: the
+      // "WEBP" fourcc plus every chunk.
+      header.writeUInt32LE(4 + body.length, 4);
+      header.write("WEBP", 8, "latin1");
+      return Buffer.concat([header, body]);
+    }
     i = next;
   }
-  return true;
+  return null;
 }
 
 /**
- * True when an upload carries embedded metadata of its own.
+ * Returns the upload with every metadata block removed, or `null` when the
+ * file's own structure could not be walked.
  *
- * Both upload paths in the client re-encode through a `<canvas>`, which emits
- * the bare minimum for each format and no metadata at all — so bytes that still
- * carry an Exif or XMP block did not come from the client, and storing them
- * verbatim would re-serve the uploader's GPS coordinates, camera serial and
- * original timestamps to every member who can see the photo. Refusing them
- * forces every upload through the re-encode the client already does. Stripping
- * the block instead would need a decoder, and therefore a dependency this
- * deploy cannot install.
+ * A photo straight off a phone carries the GPS coordinates it was taken at, the
+ * camera's serial number and the original timestamp, and storing those verbatim
+ * re-serves them to every member who can see the photo. Stripping is
+ * structural: each format describes its own segments, so the blocks can be
+ * dropped by walking headers alone — no decoder, and the compressed pixel data
+ * is copied through untouched.
  *
- * This was JPEG-only on the reasoning that JPEG is what phone cameras produce.
- * That was the wrong boundary: what the *client* sends is not what the API
- * accepts, and `/api/posts` and `/api/auth/avatar` both take a declared
- * `image/png` or `image/webp` whose magic bytes agree. A camera roll photo
- * converted to PNG by any ordinary tool keeps its Exif in an `eXIf` chunk, and
- * every check in front of this one waves it straight through.
+ * This used to *refuse* an upload carrying metadata, on the reasoning that both
+ * upload paths in the client re-encode through a `<canvas>` and so could only
+ * ever produce bare files. That reasoning held for Chrome and Firefox and was
+ * wrong everywhere else: on macOS and iOS, `toDataURL` hands the frame to
+ * ImageIO, which writes its own `Exif\0\0` APP1 into every JPEG it encodes.
+ * Safari could therefore not upload a photo at all — the rule meant to protect
+ * the uploader's location rejected the uploader instead.
  */
-export function carriesExifMetadata(bytes: Buffer, format: ImageFormat): boolean {
-  if (format === "png") return pngCarriesMetadata(bytes);
-  if (format === "webp") return webpCarriesMetadata(bytes);
-  return jpegCarriesMetadata(bytes);
+export function stripMetadata(bytes: Buffer, format: ImageFormat): Buffer | null {
+  if (format === "png") return stripPngMetadata(bytes);
+  if (format === "webp") return stripWebpMetadata(bytes);
+  return stripJpegMetadata(bytes);
 }

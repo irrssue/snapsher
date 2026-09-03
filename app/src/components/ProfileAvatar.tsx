@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { deleteAccount, updateAvatar } from "../api/auth";
-import { assertPickableImage, ImageRejected } from "../images";
+import {
+  assertPickableImage,
+  ImageRejected,
+  PICKER_ACCEPT,
+  undecodableMessage,
+} from "../images";
 import { AvatarCropModal } from "./AvatarCropModal";
 import { ChangePasswordModal } from "./ChangePasswordModal";
 import { DeleteAccountModal } from "./DeleteAccountModal";
@@ -20,7 +25,13 @@ type ProfileAvatarProps = {
 export function ProfileAvatar({ user, onAvatarChange, onLogout, onAccountDeleted }: ProfileAvatarProps) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pickedImageUrl, setPickedImageUrl] = useState<string | null>(null);
+  /**
+   * The object URL the cropper reads, paired with what to say if the browser
+   * can't decode it. The pair is one piece of state because it is one pick: the
+   * `File` is gone by the time the cropper reports a failed load, so the
+   * message has to be worked out here, while the file is still in hand.
+   */
+  const [picked, setPicked] = useState<{ url: string; undecodable: string } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showDeleteAccount, setShowDeleteAccount] = useState(false);
@@ -41,7 +52,7 @@ export function ProfileAvatar({ user, onAvatarChange, onLogout, onAccountDeleted
     setShowSettings(false);
 
     setError(null);
-    // `accept="image/*"` only filters the picker's own listing; a 400MB video
+    // The `accept` list only filters the picker's own listing; a 400MB video
     // or a decompression bomb still arrives here if the user switches the
     // dialog to "All files". Checked before the object URL exists, so the
     // cropper is never handed something it can't survive decoding.
@@ -51,7 +62,7 @@ export function ProfileAvatar({ user, onAvatarChange, onLogout, onAccountDeleted
       setError(err instanceof ImageRejected ? err.message : "Couldn't read that photo.");
       return;
     }
-    setPickedImageUrl(URL.createObjectURL(file));
+    setPicked({ url: URL.createObjectURL(file), undecodable: undecodableMessage(file) });
   }
 
   /**
@@ -61,12 +72,13 @@ export function ProfileAvatar({ user, onAvatarChange, onLogout, onAccountDeleted
    * revoke to the URL's own lifetime covers both exits with one rule.
    */
   useEffect(() => {
-    if (!pickedImageUrl) return;
-    return () => URL.revokeObjectURL(pickedImageUrl);
-  }, [pickedImageUrl]);
+    const url = picked?.url;
+    if (!url) return;
+    return () => URL.revokeObjectURL(url);
+  }, [picked?.url]);
 
   function closeCropper() {
-    setPickedImageUrl(null);
+    setPicked(null);
   }
 
   async function handleCropConfirm(photo: string) {
@@ -159,7 +171,7 @@ export function ProfileAvatar({ user, onAvatarChange, onLogout, onAccountDeleted
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept={PICKER_ACCEPT}
         onChange={handleFileChange}
         disabled={uploading}
         className="hidden"
@@ -172,9 +184,10 @@ export function ProfileAvatar({ user, onAvatarChange, onLogout, onAccountDeleted
         </p>
       )}
 
-      {pickedImageUrl && (
+      {picked && (
         <AvatarCropModal
-          imageUrl={pickedImageUrl}
+          imageUrl={picked.url}
+          undecodableMessage={picked.undecodable}
           onCancel={closeCropper}
           onConfirm={handleCropConfirm}
         />
