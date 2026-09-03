@@ -40,7 +40,11 @@ function actorOf(req: express.Request): Actor {
   return { userId: req.auth!.user.id };
 }
 
-function parseId(raw: string): number | null {
+function parseId(raw: unknown): number | null {
+  // Express 5 permits a repeated path parameter to be exposed as an array.
+  // IDs are one scalar segment only; accepting an array by coercion would turn
+  // a malformed route into a different identifier than the client sent.
+  if (typeof raw !== "string") return null;
   const id = Number(raw);
   return Number.isInteger(id) && id > 0 ? id : null;
 }

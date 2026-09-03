@@ -20,7 +20,10 @@ function actorOf(req: express.Request): Actor {
   return { userId: req.auth!.user.id };
 }
 
-function parseId(raw: string): number | null {
+function parseId(raw: unknown): number | null {
+  // A repeated Express 5 path parameter is represented as an array. This API
+  // only accepts one numeric id, so reject it rather than coercing it.
+  if (typeof raw !== "string") return null;
   const id = Number(raw);
   return Number.isInteger(id) && id > 0 ? id : null;
 }
