@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { config } from "./config.js";
-import { db, type PendingSignupRow } from "./db.js";
+import { db, type PasswordResetRow, type PendingSignupRow } from "./db.js";
 
 const upsertStmt = db.prepare(`
   INSERT INTO pending_signups
@@ -100,10 +100,94 @@ export function recordResend(row: { email: string; codeHash: string; now: number
   recordResendStmt.run(row.codeHash, row.now + config.verification.codeTtlMs, row.now, row.email);
 }
 
-/** Keeps the table from growing without bound on a long-running process, same shape as `startSessionSweeper`. */
-export function startPendingSignupSweeper() {
+/**
+ * Password resets, on the same discipline as pending sign-ups above: one live
+ * code per address, stored as a hash bound to that address, with `expires_at`
+ * and `attempts` doing the real work of bounding guesses.
+ *
+ * Upserting rather than refusing a second `/forgot-password` is deliberate and
+ * safe here in a way it needed a possession token to be safe for sign-up: this
+ * row names an account that already exists, and every code for it goes to that
+ * account's own inbox. A second caller re-running the flow can only cause the
+ * real owner to receive another code — it cannot make the row completable by
+ * anyone who isn't reading that inbox.
+ */
+const upsertResetStmt = db.prepare(`
+  INSERT INTO password_resets
+    (email, user_id, code_hash, created_at, expires_at, last_sent_at, attempts)
+  VALUES (@email, @user_id, @code_hash, @created_at, @expires_at, @last_sent_at, 0)
+  ON CONFLICT (email) DO UPDATE SET
+    user_id = excluded.user_id,
+    code_hash = excluded.code_hash,
+    created_at = excluded.created_at,
+    expires_at = excluded.expires_at,
+    last_sent_at = excluded.last_sent_at,
+    attempts = 0
+`);
+
+const selectResetStmt = db.prepare("SELECT * FROM password_resets WHERE email = ?");
+const deleteResetStmt = db.prepare("DELETE FROM password_resets WHERE email = ?");
+const deleteResetsForUserStmt = db.prepare("DELETE FROM password_resets WHERE user_id = ?");
+const recordResetAttemptStmt = db.prepare(
+  "UPDATE password_resets SET attempts = attempts + 1 WHERE email = ?",
+);
+const deleteExpiredResetsStmt = db.prepare("DELETE FROM password_resets WHERE expires_at <= ?");
+
+export function upsertPasswordReset(row: {
+  email: string;
+  userId: number;
+  codeHash: string;
+  now: number;
+}): void {
+  upsertResetStmt.run({
+    email: row.email,
+    user_id: row.userId,
+    code_hash: row.codeHash,
+    created_at: row.now,
+    expires_at: row.now + config.verification.codeTtlMs,
+    last_sent_at: row.now,
+  });
+}
+
+export function findPasswordReset(email: string): PasswordResetRow | undefined {
+  return selectResetStmt.get(email) as PasswordResetRow | undefined;
+}
+
+export function deletePasswordReset(email: string): void {
+  deleteResetStmt.run(email);
+}
+
+/**
+ * Called when a password changes by any other route. A reset code outstanding
+ * at that moment was minted against a password that no longer exists, and
+ * leaving it live would mean an old code — possibly the very one an attacker
+ * asked for — still able to take the account over after the owner had already
+ * secured it.
+ */
+export function deletePasswordResetsForUser(userId: number): void {
+  deleteResetsForUserStmt.run(userId);
+}
+
+/** Returns the row's attempt count *after* incrementing, mirroring `recordVerifyAttempt`. */
+export function recordResetAttempt(email: string): number {
+  recordResetAttemptStmt.run(email);
+  return (
+    (selectResetStmt.get(email) as PasswordResetRow | undefined)?.attempts ??
+    config.verification.maxAttempts
+  );
+}
+
+/**
+ * Keeps both short-lived tables from growing without bound on a long-running
+ * process, same shape as `startSessionSweeper`. They are swept together because
+ * they expire on the same clock and for the same reason: a code nobody used is
+ * a hash of a live secret sitting in a file that gets backed up.
+ */
+export function startVerificationSweeper() {
   const sweep = () => {
-    deleteExpiredStmt.run(Date.now());
+    const now = Date.now();
+    deleteExpiredStmt.run(now);
+    deleteExpiredResetsStmt.run(now);
   };
   sweep();
   const timer = setInterval(sweep, 60 * 60 * 1000);

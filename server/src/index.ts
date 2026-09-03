@@ -5,12 +5,13 @@ import cors from "cors";
 import { config } from "./config.js";
 import { authRouter } from "./auth.js";
 import { postsRouter, uploadsRouter } from "./posts.js";
+import { startUploadSweeper } from "./postsStore.js";
 import { friendsRouter, usersRouter } from "./friends.js";
 import { avatarsRouter } from "./avatars.js";
 import { rateLimit } from "./rateLimit.js";
 import { attachSession, requireCsrfToken, startSessionSweeper } from "./sessions.js";
 import { enforceTrustedOrigin, errorHandler, notFound, securityHeaders } from "./security.js";
-import { startPendingSignupSweeper } from "./verificationStore.js";
+import { startVerificationSweeper } from "./verificationStore.js";
 
 const app = express();
 
@@ -45,8 +46,27 @@ app.use((req, _res, next) => {
   next();
 });
 
-// Production serves the SPA from this same origin, so CORS only has work to do
-// when a separate dev origin is configured.
+/**
+ * Everything dynamic sits behind this chain, in this order: count the request,
+ * resolve who is making it, then prove it came from our own front end before
+ * any handler — or any body parser — sees it. The SPA bundle skips the chain
+ * entirely, and photos are counted separately from the API so that loading a
+ * feed full of images can't exhaust a reader's budget for the API itself.
+ */
+const dynamicPaths = ["/api", "/uploads"];
+app.use("/api", rateLimit(config.rateLimits.api));
+app.use("/uploads", rateLimit(config.rateLimits.photos));
+
+/**
+ * Production serves the SPA from this same origin, so CORS only has work to do
+ * when a separate dev origin is configured.
+ *
+ * Mounted *below* the two limiters, because `cors` answers a preflight itself
+ * and never calls `next()`. Above them, every `OPTIONS` — which is every
+ * cross-origin write the SPA makes — was served without being counted by
+ * anything, so a caller could hold the process busy for free through the one
+ * path in the app that deliberately does no work.
+ */
 if (config.clientOrigins.length > 0) {
   app.use(
     cors({
@@ -63,16 +83,6 @@ if (config.clientOrigins.length > 0) {
   );
 }
 
-/**
- * Everything dynamic sits behind this chain, in this order: count the request,
- * resolve who is making it, then prove it came from our own front end before
- * any handler — or any body parser — sees it. The SPA bundle skips the chain
- * entirely, and photos are counted separately from the API so that loading a
- * feed full of images can't exhaust a reader's budget for the API itself.
- */
-const dynamicPaths = ["/api", "/uploads"];
-app.use("/api", rateLimit(config.rateLimits.api));
-app.use("/uploads", rateLimit(config.rateLimits.photos));
 app.use(dynamicPaths, attachSession);
 app.use(dynamicPaths, enforceTrustedOrigin);
 app.use(dynamicPaths, requireCsrfToken);
@@ -106,7 +116,9 @@ if (config.isProd) {
     }),
   );
 
-  app.get("*", (_req, res) => {
+  // Express 5's path matcher requires an explicit named wildcard. This is the
+  // SPA fallback, so it intentionally includes `/` as well as nested routes.
+  app.get("/{*path}", (_req, res) => {
     res.setHeader("Cache-Control", "no-cache");
     res.sendFile(path.join(staticDir, "index.html"));
   });
@@ -117,7 +129,7 @@ app.use(errorHandler);
 /**
  * Every async route handler is wrapped in `asyncRoute`, so a rejected promise
  * inside a request becomes a 500. Nothing covers what runs *outside* the
- * request path: the two sweeper timers, and the `fs.promises` calls that
+ * request path: the three sweeper timers, and the `fs.promises` calls that
  * continue after a response is sent. On Node 22 an unhandled rejection
  * terminates the process by default.
  *
@@ -137,7 +149,8 @@ process.on("uncaughtException", (err) => {
 });
 
 startSessionSweeper();
-startPendingSignupSweeper();
+startVerificationSweeper();
+startUploadSweeper();
 
 function announce() {
   console.log(

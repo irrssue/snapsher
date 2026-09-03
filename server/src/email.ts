@@ -37,12 +37,23 @@ export function codeHashMatches(a: string, b: string): boolean {
 
 type SendResult = { ok: true } | { ok: false };
 
-export async function sendVerificationEmail(email: string, code: string): Promise<SendResult> {
+/**
+ * The one place that talks to the provider. Both kinds of mail this app sends
+ * are a 6-digit code to an address the *caller* named, so they share every
+ * failure mode worth reasoning about — no key, a provider timeout, an error
+ * body that must be logged rather than returned — and there is nothing to gain
+ * from two copies of that.
+ */
+async function sendCode(
+  email: string,
+  code: string,
+  message: { subject: string; text: string; logLabel: string },
+): Promise<SendResult> {
   if (!config.email.resendApiKey) {
     // Dev has no key and must still work; production with no key must not
     // pretend it sent anything. "Fail closed, not down" — the process boots
-    // and everything else serves, only sign-up refuses, rather than every new
-    // user being told to check an inbox nothing was ever sent to.
+    // and everything else serves, only sign-up and password reset refuse,
+    // rather than users being told to check an inbox nothing was sent to.
     //
     // Gated on its own opt-in rather than on `isProd`, because every other
     // control in the app already hangs off `NODE_ENV` and this is the one whose
@@ -52,10 +63,10 @@ export async function sendVerificationEmail(email: string, code: string): Promis
     // pending sign-up. `EMAIL_LOG_CODES` is set in the `dev` script and nowhere
     // else, so a homeserver that loses its env refuses sign-ups instead.
     if (!config.email.logCodes) {
-      console.error("[email] RESEND_API_KEY is unset — cannot send verification codes.");
+      console.error("[email] RESEND_API_KEY is unset — cannot send codes.");
       return { ok: false };
     }
-    console.log(`[email] verification code for ${email}: ${code}`);
+    console.log(`[email] ${message.logLabel} for ${email}: ${code}`);
     return { ok: true };
   }
 
@@ -69,11 +80,8 @@ export async function sendVerificationEmail(email: string, code: string): Promis
       body: JSON.stringify({
         from: config.email.from,
         to: [email],
-        subject: `${code} is your Snapsher code`,
-        text:
-          `Your Snapsher verification code is ${code}.\n\n` +
-          `It expires in ${Math.round(config.verification.codeTtlMs / 60_000)} minutes. ` +
-          `If you didn't try to sign up, you can ignore this email.`,
+        subject: message.subject,
+        text: message.text,
       }),
       // Node's fetch has no default timeout. Without this, a provider that
       // accepts the connection and never answers holds the sign-up request —
@@ -93,4 +101,38 @@ export async function sendVerificationEmail(email: string, code: string): Promis
     console.error("[email] resend request failed", err);
     return { ok: false };
   }
+}
+
+export function sendVerificationEmail(email: string, code: string): Promise<SendResult> {
+  const minutes = Math.round(config.verification.codeTtlMs / 60_000);
+  return sendCode(email, code, {
+    subject: `${code} is your Snapsher code`,
+    text:
+      `Your Snapsher verification code is ${code}.\n\n` +
+      `It expires in ${minutes} minutes. ` +
+      `If you didn't try to sign up, you can ignore this email.`,
+    logLabel: "verification code",
+  });
+}
+
+/**
+ * The wording carries real weight here in a way the sign-up code's doesn't.
+ * `/forgot-password` answers 202 to any address, so a stranger can cause this
+ * mail to arrive in an inbox whose owner did nothing — the message has to say
+ * plainly that ignoring it leaves the account untouched, or a phishing-shaped
+ * mail from the real sending domain is what a victim sees. It also names no
+ * username and carries no link: there is nothing in it to act on except by
+ * returning to a Snapsher tab the recipient opened themselves.
+ */
+export function sendPasswordResetEmail(email: string, code: string): Promise<SendResult> {
+  const minutes = Math.round(config.verification.codeTtlMs / 60_000);
+  return sendCode(email, code, {
+    subject: `${code} is your Snapsher password reset code`,
+    text:
+      `Your Snapsher password reset code is ${code}.\n\n` +
+      `It expires in ${minutes} minutes. ` +
+      `If you didn't ask to reset your password, you can ignore this email — ` +
+      `nothing has changed, and your password still works.`,
+    logLabel: "password reset code",
+  });
 }

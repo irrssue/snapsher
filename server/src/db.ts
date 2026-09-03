@@ -79,6 +79,36 @@ db.exec(`
 `);
 
 /**
+ * When this user last consumed their 12-hour posting window.
+ *
+ * The quota used to be derived from `MAX(posts.created_at)`, which was correct
+ * only for as long as posts could never be deleted. The moment
+ * `DELETE /api/posts/:id` exists, deriving it from that table means deleting
+ * your newest photo hands the window straight back: post, delete, post again,
+ * forever — an unlimited-posting loophole that defeats the one rule the whole
+ * product is built on. Tracking it on the user instead means the quota outlives
+ * the row it was spent on, and a delete never touches it.
+ *
+ * `NOT NULL DEFAULT 0` so an account that has never posted reads as "allowed
+ * now" without a nullable branch in every caller. The backfill is what keeps
+ * accounts that posted *before* this column existed from getting one free extra
+ * photo on deploy day; it runs only on the migration that adds the column, so
+ * re-running it can never resurrect a window a later delete was supposed to
+ * keep spent. It has to sit below `CREATE TABLE posts` — on a fresh database
+ * that table does not exist yet at the point the other user columns are added.
+ */
+if (!userColumns.some((column) => column.name === "last_post_at")) {
+  db.exec("ALTER TABLE users ADD COLUMN last_post_at INTEGER NOT NULL DEFAULT 0");
+  db.exec(`
+    UPDATE users
+       SET last_post_at = COALESCE(
+             (SELECT MAX(posts.created_at) FROM posts WHERE posts.user_id = users.id),
+             0
+           )
+  `);
+}
+
+/**
  * Sessions live here rather than inside the cookie so that signing out, an
  * expiry, or a deleted account actually ends the session server-side. The row
  * id is a SHA-256 of the token the browser holds, so a leaked database still
@@ -132,10 +162,13 @@ db.exec(`
  * the same person may say two different things — so this is an ordinary
  * autoincrement table.
  *
- * Nothing here counts. `about.md` excludes comment counts as deliberately as it
- * excludes like counts, so no query in the app may aggregate this table; the
- * only way its size is ever observable is by reading the comments themselves,
- * which is exactly the same rule `likers` follows.
+ * This table *is* aggregated, unlike `likes`, and `about.md` says why: anyone
+ * who can open a thread could already count the replies in it by scrolling, so
+ * the badge `commentCountFor` produces saves the scroll without exposing
+ * anything new. A like count is different — nothing on screen reveals it to
+ * anyone but the author — which is why that one stays private. The rule the
+ * counts follow is "never publish what reading can't already tell you", not
+ * "never count".
  */
 db.exec(`
   CREATE TABLE IF NOT EXISTS comments (
@@ -196,12 +229,58 @@ db.exec(
   "CREATE INDEX IF NOT EXISTS idx_pending_signups_expires ON pending_signups (expires_at)",
 );
 
+/**
+ * A password reset in flight. Same discipline as `pending_signups` and for the
+ * same reasons: keyed on the (normalized) address so only one code is ever live
+ * for one inbox, `code_hash` stored rather than the code so a leaked row isn't
+ * itself a working reset, and `expires_at` + `attempts` doing the actual work of
+ * bounding guesses over the network.
+ *
+ * Two differences from `pending_signups`, both deliberate:
+ *   - `user_id` with `ON DELETE CASCADE`, so deleting the account takes any
+ *     outstanding reset with it rather than leaving a code that resolves to a
+ *     row that no longer exists.
+ *   - no `token_hash`. The possession token there exists because `/signup`
+ *     *replaces* a row someone else may have created, and whoever made the most
+ *     recent call has to be the only one able to finish it. A reset row belongs
+ *     to an account that already exists and can only ever be completed by
+ *     whoever reads that account's inbox, so there is nothing a second caller
+ *     could take over: re-running `/forgot-password` only ever mails a fresh
+ *     code to the same address.
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS password_resets (
+    email TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code_hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    last_sent_at INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0
+  )
+`);
+
+db.exec(
+  "CREATE INDEX IF NOT EXISTS idx_password_resets_expires ON password_resets (expires_at)",
+);
+
 db.exec(
   "CREATE INDEX IF NOT EXISTS idx_posts_user_created ON posts (user_id, created_at DESC)",
 );
 db.exec(
   "CREATE INDEX IF NOT EXISTS idx_comments_post_created ON comments (post_id, created_at)",
 );
+/**
+ * `likes` is keyed (post_id, user_id) and `comments` is indexed
+ * (post_id, created_at), so both are fast for "everything on this post" and a
+ * full table scan for "everything by this user". Three paths ask the second
+ * question: un-friending deletes both users' likes and comments on each other's
+ * posts, deleting an account cascades through every row it owns, and deleting a
+ * post does the same for its thread. All three are writes holding a
+ * transaction, which is exactly where a scan is most expensive.
+ */
+db.exec("CREATE INDEX IF NOT EXISTS idx_likes_user ON likes (user_id)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_comments_user ON comments (user_id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions (expires_at)");
 db.exec(
@@ -272,6 +351,8 @@ export type UserRow = {
   avatar_file: string | null;
   created_at: string;
   email_verified_at: number | null;
+  /** Epoch ms of the last post that spent this user's 12-hour window; 0 = never. */
+  last_post_at: number;
 };
 
 export type PendingSignupRow = {
@@ -285,6 +366,16 @@ export type PendingSignupRow = {
   last_sent_at: number;
   attempts: number;
   resends: number;
+};
+
+export type PasswordResetRow = {
+  email: string;
+  user_id: number;
+  code_hash: string;
+  created_at: number;
+  expires_at: number;
+  last_sent_at: number;
+  attempts: number;
 };
 
 export type PostRow = {

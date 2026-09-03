@@ -134,9 +134,17 @@ const insertSession = db.prepare(
 const selectSession = db.prepare("SELECT * FROM sessions WHERE id = ?");
 const touchSession = db.prepare("UPDATE sessions SET last_seen_at = ? WHERE id = ?");
 const deleteSession = db.prepare("DELETE FROM sessions WHERE id = ?");
+const deleteSessionsForUser = db.prepare("DELETE FROM sessions WHERE user_id = ?");
 const deleteStaleSessions = db.prepare(
   "DELETE FROM sessions WHERE expires_at <= ? OR last_seen_at <= ?",
 );
+/**
+ * Hoisted like every other hot statement here. `attachSession` runs on `/api`
+ * *and* `/uploads`, so a cold feed of 100 photos is 101 requests through this
+ * line; better-sqlite3 caches nothing, and preparing inside the handler meant
+ * parsing and compiling this statement 101 times to answer one screen.
+ */
+const selectUserById = db.prepare("SELECT * FROM users WHERE id = ?");
 
 /**
  * Issues a brand-new session. Always called on a successful sign-in (never
@@ -185,6 +193,26 @@ export function startSession(req: Request, res: Response, userId: number): Sessi
   return session;
 }
 
+/**
+ * Signs an account out *everywhere*, on every device, immediately.
+ *
+ * The reason sessions live in a table rather than in the cookie is so this is
+ * possible at all: `endSession` can only reach the session whose token the
+ * caller presented, which left a phished password or a lifted cookie
+ * unrecoverable — the intruder's session simply ran its 30-day course. Changing
+ * a password and completing a reset are the two moments where the whole point
+ * is "whatever else is signed in as me, stop being signed in as me", so both
+ * call this and neither is complete without it.
+ *
+ * The caller decides what happens next: a password *change* mints a fresh
+ * session afterwards, because the person doing it is holding the device and
+ * shouldn't be logged out of it; a *reset* deliberately does not, since the one
+ * scenario it exists for is the one where you can't be sure who is asking.
+ */
+export function revokeAllSessions(userId: number) {
+  deleteSessionsForUser.run(userId);
+}
+
 export function endSession(
   req: Request,
   res: Response,
@@ -224,9 +252,7 @@ export const attachSession: RequestHandler = (req, res, next) => {
     return next();
   }
 
-  const user = db.prepare("SELECT * FROM users WHERE id = ?").get(session.user_id) as
-    | UserRow
-    | undefined;
+  const user = selectUserById.get(session.user_id) as UserRow | undefined;
   if (!user) {
     // Account gone; the cascade should have taken the session with it.
     deleteSession.run(id);

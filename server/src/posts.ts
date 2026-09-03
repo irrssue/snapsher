@@ -3,11 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import express, { Router } from "express";
 import { config } from "./config.js";
-import { rateLimit } from "./rateLimit.js";
+import { authenticatedKey, rateLimit } from "./rateLimit.js";
 import { requireAuth } from "./sessions.js";
 import { asyncRoute } from "./security.js";
 import {
   createPostFor,
+  deletePostFor,
   listFeedFor,
   nextAllowedAtFor,
   quotaFor,
@@ -56,9 +57,37 @@ postsRouter.get("/quota", (req, res) => {
   res.json(quotaFor(actorOf(req)));
 });
 
+/**
+ * The 12-hour window, checked before the body is read.
+ *
+ * This is a middleware rather than the first few lines of the handler because
+ * of where `express.json` sits: as a handler check it ran *after* body-parser
+ * had already buffered, base64-decoded and JSON-parsed up to 12 MB from a
+ * caller we were about to refuse anyway. Someone with a valid session and a
+ * spent window could push 12 MB through the parser as fast as the rate limiter
+ * allowed and always get a 429 for it. Ahead of the parser, the same request
+ * costs one indexed read and the socket is closed on it.
+ *
+ * The transaction in `insertWithinQuota` is still the authority — this is an
+ * optimisation, and two requests racing each other both pass here.
+ */
+const refuseWhenOverQuota: express.RequestHandler = (req, res, next) => {
+  const allowedAt = nextAllowedAtFor(actorOf(req));
+  if (Date.now() < allowedAt) {
+    return res.status(429).json({
+      error: "You've already shared a photo in the last 12 hours.",
+      nextAllowedAt: allowedAt,
+    });
+  }
+  next();
+};
+
 postsRouter.post(
   "/",
-  rateLimit(config.rateLimits.createPost),
+  // Keyed on the account, not the address: everyone behind one NAT used to
+  // share a single ten-posts-an-hour budget. See `authenticatedKey`.
+  rateLimit(config.rateLimits.createPost, authenticatedKey),
+  refuseWhenOverQuota,
   // Photos arrive as base64 data URLs in the JSON body, so this one route gets
   // a much larger cap than the 16kb the rest of the API accepts.
   express.json({ limit: "12mb" }),
@@ -83,15 +112,6 @@ postsRouter.post(
       return res
         .status(400)
         .json({ error: `Description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer.` });
-    }
-
-    // Reject an over-quota post before spending anything on decoding or disk.
-    const allowedAt = nextAllowedAtFor(actor);
-    if (Date.now() < allowedAt) {
-      return res.status(429).json({
-        error: "You've already shared a photo in the last 12 hours.",
-        nextAllowedAt: allowedAt,
-      });
     }
 
     const [, declaredFormat, base64] = match;
@@ -151,6 +171,40 @@ postsRouter.post(
   }),
 );
 
+/**
+ * Deleting your own photo — the only way anything ever leaves this app, and the
+ * retraction the pixel-budget and Exif checks in images.ts previously had to
+ * stand in for.
+ *
+ * It does *not* give the 12-hour window back. `deletePostFor` explains why in
+ * full: the quota lives on the user row precisely so this route can't become
+ * post → delete → post again.
+ */
+postsRouter.delete(
+  "/:id",
+  asyncRoute(async (req, res) => {
+    const postId = parseId(req.params.id);
+    // Same 404 as a post belonging to someone else, so a stranger walking
+    // sequential ids learns nothing about which of them exist.
+    if (postId === null) return res.status(404).json({ error: "That post doesn't exist." });
+
+    const photoFile = deletePostFor(actorOf(req), postId);
+    if (!photoFile) return res.status(404).json({ error: "That post doesn't exist." });
+
+    // The row is what the user asked to be rid of and it is already gone; a
+    // file that outlives it is wasted disk the hourly sweeper in postsStore
+    // collects, not a reason to tell them the delete failed and leave them
+    // pressing a button on a post that no longer exists.
+    try {
+      await fs.promises.rm(path.join(uploadsDir, photoFile), { force: true });
+    } catch (err) {
+      console.warn(`[posts] could not remove ${photoFile} after deleting its post`, err);
+    }
+
+    res.status(204).end();
+  }),
+);
+
 postsRouter.post(
   "/:id/like",
   rateLimit(config.rateLimits.like),
@@ -185,10 +239,14 @@ postsRouter.get("/:id/likers", (req, res) => {
 });
 
 /**
- * Comments. Readable by the same audience as the post itself, and returned as a
- * plain list — there is no count endpoint and no count field anywhere, which is
- * the same rule the like button follows and the reason `about.md` gives for
- * both: the interaction exists, the score-keeping doesn't.
+ * Comments. Readable by the same audience as the post itself.
+ *
+ * A count *is* published — `commentCount` on every post and grid summary this
+ * file serves — and `about.md` says why that is not the same concession as a
+ * like count: anyone who can open a thread could already count the replies by
+ * scrolling it, so the badge saves the scroll and reveals nothing. A like count
+ * has no such reading; nothing on screen tells anyone but the author what it
+ * is, which is why that one stays the author's alone.
  */
 postsRouter.get("/:id/comments", (req, res) => {
   const postId = parseId(req.params.id);
@@ -204,7 +262,8 @@ postsRouter.get("/:id/comments", (req, res) => {
 
 postsRouter.post(
   "/:id/comments",
-  rateLimit(config.rateLimits.createComment),
+  // Per-account, not per-address — see `authenticatedKey`.
+  rateLimit(config.rateLimits.createComment, authenticatedKey),
   express.json({ limit: "4kb" }),
   (req, res) => {
     const postId = parseId(req.params.id);

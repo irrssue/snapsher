@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-export type AuthStep = "credentials" | "username" | "code";
+export type AuthStep = "credentials" | "username" | "code" | "forgot" | "reset";
 
 export type AuthCredentialsData = {
   email: string;
@@ -14,8 +14,18 @@ type AuthPageProps = {
   onSubmitUsername: (username: string) => void;
   onSubmitCode: (code: string) => void;
   onResendCode: () => void;
+  /** Moves to the "what's your address" step of a password reset. */
+  onForgotPassword: () => void;
+  onRequestPasswordReset: (email: string) => void;
+  onResetPassword: (input: { code: string; newPassword: string }) => void;
   onBack: () => void;
   error?: string | null;
+  /**
+   * A non-failure message shown in the same place as `error` — "we've sent a
+   * code", "your password was changed". Kept separate so the two can't be
+   * confused for each other by colour alone.
+   */
+  notice?: string | null;
   submitting?: boolean;
   /**
    * Absolute timestamp — not a duration — for when the resend button
@@ -63,8 +73,12 @@ export function AuthPage({
   onSubmitUsername,
   onSubmitCode,
   onResendCode,
+  onForgotPassword,
+  onRequestPasswordReset,
+  onResetPassword,
   onBack,
   error,
+  notice,
   submitting,
   resendAt,
   resendSubmitting,
@@ -111,6 +125,7 @@ export function AuthPage({
           />
 
           {error && <p className="text-center text-xs text-red-400">{error}</p>}
+          {notice && <p className="text-center text-xs text-neutral-300">{notice}</p>}
 
           <button
             type="submit"
@@ -118,6 +133,13 @@ export function AuthPage({
             className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-40"
           >
             {submitting ? "Please wait…" : "Continue"}
+          </button>
+          <button
+            type="button"
+            onClick={onForgotPassword}
+            className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
+          >
+            Forgot password?
           </button>
         </form>
       ) : step === "username" ? (
@@ -169,7 +191,7 @@ export function AuthPage({
             ← Use a different email
           </button>
         </form>
-      ) : (
+      ) : step === "code" ? (
         <form
           key="code"
           onSubmit={(e) => {
@@ -228,6 +250,119 @@ export function AuthPage({
             className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
           >
             ← Start over
+          </button>
+        </form>
+      ) : step === "forgot" ? (
+        <form
+          key="forgot"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const formData = new FormData(e.currentTarget);
+            onRequestPasswordReset(String(formData.get("email") ?? ""));
+          }}
+          className="flex w-full max-w-xs flex-col items-center gap-3"
+        >
+          <p className="break-words text-center text-xs text-neutral-400">
+            Enter your email and we'll send a 6-digit code to reset your password.
+          </p>
+          <AuthInput
+            type="email"
+            name="email"
+            placeholder="Email"
+            aria-label="Email"
+            autoComplete="email"
+            defaultValue={email}
+            required
+          />
+
+          {error && <p className="text-center text-xs text-red-400">{error}</p>}
+
+          <button
+            type="submit"
+            disabled={submitting}
+            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-40"
+          >
+            {submitting ? "Please wait…" : "Send code"}
+          </button>
+          <button
+            type="button"
+            onClick={onBack}
+            className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
+          >
+            ← Back to sign in
+          </button>
+        </form>
+      ) : (
+        <form
+          key="reset"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const formData = new FormData(e.currentTarget);
+            onResetPassword({
+              code: String(formData.get("code") ?? ""),
+              newPassword: String(formData.get("newPassword") ?? ""),
+            });
+          }}
+          className="flex w-full max-w-xs flex-col items-center gap-3"
+        >
+          {/*
+           * "If that address has an account" is not padding: the server answers
+           * identically whether or not it does, precisely so this screen can't
+           * be used to find out who is a member. Saying "we've sent you a code"
+           * would give away what the API deliberately withholds.
+           */}
+          <p className="break-words text-center text-xs text-neutral-400">
+            If <span className="text-white">{email}</span> has an account, a 6-digit code
+            is on its way. Enter it below with your new password.
+          </p>
+          <AuthInput
+            type="text"
+            name="code"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            placeholder="6-digit code"
+            aria-label="Reset code"
+            autoComplete="one-time-code"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            required
+            minLength={6}
+            maxLength={6}
+          />
+          <AuthInput
+            type="password"
+            name="newPassword"
+            placeholder="New password"
+            aria-label="New password"
+            autoComplete="new-password"
+            enterKeyHint="go"
+            required
+            minLength={8}
+          />
+
+          {error && <p className="text-center text-xs text-red-400">{error}</p>}
+
+          <button
+            type="submit"
+            disabled={submitting}
+            className="mt-4 w-full rounded-full bg-white py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 active:opacity-70 disabled:opacity-40"
+          >
+            {submitting ? "Please wait…" : "Reset password"}
+          </button>
+          <button
+            type="button"
+            onClick={onForgotPassword}
+            className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
+          >
+            Send another code
+          </button>
+          <button
+            type="button"
+            onClick={onBack}
+            className="-m-2 p-2 text-xs text-neutral-400 transition-colors hover:text-white active:text-white"
+          >
+            ← Back to sign in
           </button>
         </form>
       )}

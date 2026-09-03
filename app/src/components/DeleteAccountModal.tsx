@@ -28,6 +28,11 @@ export function DeleteAccountModal({ onCancel, onConfirm }: DeleteAccountModalPr
       await onConfirm(password);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't delete your account.");
+    } finally {
+      // In `finally`, not just the catch: the success path unmounts this dialog
+      // so the flag is moot there, while anything that throws outside the
+      // catch's reach would otherwise leave the form disabled and reading
+      // "Deleting…" forever.
       setSubmitting(false);
     }
   }

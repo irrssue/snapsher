@@ -67,3 +67,50 @@ export type PostQuota = {
   serverNow: number;
   postCount: number;
 };
+
+/**
+ * Where the viewer stands with someone a search turned up. Search no longer
+ * hides people with a request pending in either direction — that made a person
+ * you had just written to read as "not on Snapsher" after a reload — so every
+ * result now says which of the four states it is in and the row renders Add /
+ * Accept / Requested / Friends from it.
+ */
+export type RequestState = "none" | "incoming" | "outgoing" | "friends";
+
+export type Friend = {
+  id: number;
+  username: string;
+  avatarUrl: string | null;
+};
+
+export type SearchUser = Friend & { requestState: RequestState };
+
+/**
+ * A public profile never carries a friend count or friend status — per
+ * `about.md`, only the account owner sees their own friend count.
+ */
+export type PublicProfile = Friend & { postCount: number };
+
+export type FriendRequest = {
+  /** The request's own id — what accept/decline/cancel are addressed to. */
+  id: number;
+  /**
+   * The other person's user id. Distinct from `id` above: they come from
+   * different tables and collide routinely, so anything that identifies the
+   * *person* (the friend list, "Remove", matching a search row) must use this
+   * one.
+   */
+  userId: number;
+  username: string;
+  avatarUrl: string | null;
+};
+
+/**
+ * Both directions, in one response. `outgoing` used to have no representation
+ * at all: a sent request lived only in component state, so a reload lost every
+ * trace of it and the person it was sent to had vanished from search too.
+ */
+export type FriendRequestsResponse = {
+  incoming: FriendRequest[];
+  outgoing: FriendRequest[];
+};

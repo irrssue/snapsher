@@ -1,22 +1,40 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import express, { Router, type Response } from "express";
+import express, { Router, type Request, type Response } from "express";
 import bcrypt from "bcryptjs";
 import { config } from "./config.js";
 import { db, isUniqueConstraintError, type PostRow, type UserRow } from "./db.js";
-import { createLockout, rateLimit, rejectLocked } from "./rateLimit.js";
+import { authenticatedKey, createLockout, rateLimit, rejectLocked } from "./rateLimit.js";
 import { asyncRoute } from "./security.js";
-import { endSession, requireAuth, startSession, toPublicUser } from "./sessions.js";
+import {
+  endSession,
+  requireAuth,
+  revokeAllSessions,
+  startSession,
+  toPublicUser,
+} from "./sessions.js";
 import { avatarsDir } from "./avatarsStore.js";
 import { uploadsDir } from "./postsStore.js";
-import { codeHashMatches, generateCode, hashCode, sendVerificationEmail } from "./email.js";
 import {
+  codeHashMatches,
+  generateCode,
+  hashCode,
+  sendPasswordResetEmail,
+  sendVerificationEmail,
+} from "./email.js";
+import { COMMON_PASSWORDS } from "./passwordDenylist.js";
+import {
+  deletePasswordReset,
+  deletePasswordResetsForUser,
   deletePendingSignup,
+  findPasswordReset,
   findPendingSignup,
   pendingSignupTokenMatches,
   recordResend,
+  recordResetAttempt,
   recordVerifyAttempt,
+  upsertPasswordReset,
   upsertPendingSignup,
 } from "./verificationStore.js";
 import {
@@ -29,13 +47,48 @@ import {
 } from "./images.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/**
+ * `EMAIL_RE`'s `\s` covers space, tab and the newlines — but not NUL, and not
+ * most of C0 or DEL. A NUL-bearing address passed every check and then became
+ * the primary key of `pending_signups` and the value in `users.email`: a string
+ * that compares unequal to the address a human would read it as, that truncates
+ * at the NUL in anything C-shaped downstream, and that goes into the `to` field
+ * of an outbound mail. There is no legitimate address containing any of these.
+ */
+const EMAIL_CONTROL_CHARS_RE = /[\x00-\x1f\x7f]/;
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
 /** Six digits, matching `generateCode` in email.ts — see the arithmetic there. */
 const CODE_RE = /^\d{6}$/;
 const MAX_EMAIL_LENGTH = 254;
 const MIN_PASSWORD_LENGTH = 8;
-/** bcrypt only reads the first 72 bytes; the cap keeps the rest from being a silent lie. */
+/**
+ * The character cap, which is about the request rather than about bcrypt —
+ * `MAX_PASSWORD_BYTES` below is the one that matters for hashing.
+ */
 const MAX_PASSWORD_LENGTH = 128;
+/**
+ * bcrypt reads 72 *bytes*, not 72 characters, and silently discards the rest.
+ * The old cap counted characters, so 19 emoji is 76 bytes: everything past byte
+ * 72 was thrown away, and the user was never told that the tail of the password
+ * they chose is decorative. Worse, two different long passwords sharing a
+ * 72-byte prefix are the same password to bcrypt. Refusing is the honest
+ * answer; silently truncating a credential is not.
+ */
+const MAX_PASSWORD_BYTES = 72;
+
+/**
+ * Every place an address is accepted from a request body. Rejects the shape,
+ * the length and the control characters together so the four routes that take
+ * an email can't drift apart on which of the three they check.
+ */
+function isAcceptableEmail(email: unknown): email is string {
+  return (
+    typeof email === "string" &&
+    email.length <= MAX_EMAIL_LENGTH &&
+    !EMAIL_CONTROL_CHARS_RE.test(email) &&
+    EMAIL_RE.test(email.trim())
+  );
+}
 
 /**
  * Compared against when no account matches, so a sign-in attempt for an
@@ -52,6 +105,28 @@ const INVALID_CREDENTIALS = {
 const lockoutByIp = createLockout(config.lockout.perIp);
 const lockoutByAccount = createLockout(config.lockout.perAccount);
 const lockoutByVerifyIp = createLockout(config.lockout.verifyCode);
+
+/**
+ * `/continue` landing on an address with no account — the first step of every
+ * sign-up, and therefore a *success*, not a failure.
+ *
+ * This used to be charged to `lockoutByIp` alongside genuine wrong-password
+ * events, which meant new users were locked out of registering. Five taps
+ * through an ordinary sign-up reach it: "use a different email" back-navigation
+ * keeps the credentials so it is one tap, an expired code sends you round
+ * again, a taken username sends you back too. And `lockoutByIp` is only ever
+ * cleared by a successful *sign-in*, which an address with no account cannot
+ * produce — so the lock stood for its full fifteen minutes against someone who
+ * had got nothing wrong.
+ *
+ * Split out rather than dropped. The branch still has to cost something, or a
+ * mailing list can be walked for free; it is just that the right budget for
+ * "how many sign-ups is one address plausibly starting" is nothing like the
+ * right budget for "how many wrong passwords". Keyed on the source alone, not
+ * `email|ip`, because what it is counting is one source probing many addresses
+ * — per-address it would never reach its threshold at all.
+ */
+const lockoutBySignUpProbe = createLockout(config.lockout.signUpProbe);
 
 /**
  * Wrong codes counted against the *address* being verified, not the caller.
@@ -86,6 +161,35 @@ const lockoutByVerifyEmail = createLockout(config.lockout.verifyCode);
 const sendBudgetByEmail = createLockout(config.lockout.verificationSend);
 
 /**
+ * The same budget shape for reset mail, but a *separate* counter.
+ *
+ * Sharing one would cap a single address at four mails an hour across both
+ * flows, which sounds stricter and is worse: anyone can spend a stranger's
+ * sign-up budget by repeatedly running `/signup` for their address, and if that
+ * budget were shared, doing so would also block that person's password reset —
+ * turning a nuisance into a denial of account recovery. Two counters means the
+ * worst an attacker can do to one flow is exhaust that flow.
+ */
+const resetSendBudgetByEmail = createLockout(config.lockout.verificationSend);
+
+/**
+ * Wrong reset codes, counted twice on exactly the reasoning `/verify-email`
+ * gives: once against the source, which catches one caller walking many
+ * addresses, and once against the address being reset, which catches many
+ * sources walking one target. The per-row attempt cap can't do either job on
+ * its own, because re-running `/forgot-password` replaces the row that carries
+ * it.
+ *
+ * The address-keyed half is a lever an attacker can pull against a victim — it
+ * can stall someone's password reset for the lock window. That is the same
+ * trade `lockoutByVerifyEmail` makes, and acceptable for the same reason: it
+ * cannot touch `/continue`, so a user who still knows their password is never
+ * kept out of their own account by it.
+ */
+const lockoutByResetIp = createLockout(config.lockout.verifyCode);
+const lockoutByResetEmail = createLockout(config.lockout.verifyCode);
+
+/**
  * Every failure mode of `/verify-email` and `/resend-code` that isn't a wrong
  * code collapses to this one response. A wrong code is answered on its own
  * (401, with an attempts-left count), but "no such pending sign-up", "it
@@ -104,10 +208,84 @@ function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
+const selectUserByEmail = db.prepare("SELECT * FROM users WHERE email = ? COLLATE NOCASE");
+const selectUserById = db.prepare("SELECT * FROM users WHERE id = ?");
+const updatePasswordHash = db.prepare("UPDATE users SET password_hash = ? WHERE id = ?");
+
 function findUserByEmail(email: string): UserRow | undefined {
-  return db.prepare("SELECT * FROM users WHERE email = ? COLLATE NOCASE").get(email) as
-    | UserRow
-    | undefined;
+  return selectUserByEmail.get(email) as UserRow | undefined;
+}
+
+/**
+ * The sign-in lockout key `/continue` uses, rebuilt for a route that already
+ * knows who the caller is. Scoped to one account from one address so the only
+ * person a lock can shut out is whoever produced the failures, and truncated
+ * for the reason given at `/continue`: the address half is caller-chosen and
+ * may be 254 characters.
+ */
+function signInLockoutKey(req: Request, email: string): string {
+  return `${email.toLowerCase().slice(0, 64)}|${req.ip ?? "unknown"}`;
+}
+
+/**
+ * Re-proves the password on a route that already has a session.
+ *
+ * The session proves "signed in", which is not enough on its own to destroy an
+ * account or replace its password: a browser left unlocked, or a tab whose
+ * cookie has been lifted, is exactly the situation both of those routes exist
+ * to be survivable. Requiring the password again is what makes them survivable.
+ *
+ * That makes both routes password-guessing surfaces reachable *without* the
+ * sign-in flow, so they count into the same lockout `/continue` does, and are
+ * refused by it. Failures land on the caller's own `email|ip` key, so the worst
+ * an intruder achieves by guessing is locking their own source out.
+ *
+ * Answers the request and returns `null` on every rejection; a caller that gets
+ * `null` must return immediately without writing to `res`.
+ */
+async function reauthenticate(
+  req: Request,
+  res: Response,
+  password: unknown,
+  { missing, wrong }: { missing: string; wrong: { error: string; code: string } },
+): Promise<UserRow | null> {
+  if (typeof password !== "string" || password.length === 0) {
+    res.status(400).json({ error: missing });
+    return null;
+  }
+
+  // The row can be gone between `attachSession` resolving it and this handler
+  // running — the same account deleted from a second tab does exactly that.
+  // Without the guard the cast is a lie and the password check throws a
+  // TypeError, which reaches the client as a 500 and buries a real fault in the
+  // log behind noise.
+  const user = selectUserById.get(req.auth!.user.id) as UserRow | undefined;
+  if (!user) {
+    endSession(req, res);
+    res.status(401).json({ error: "Please sign in.", code: "not_authenticated" });
+    return null;
+  }
+
+  const key = signInLockoutKey(req, user.email);
+  const lockedFor = lockoutByIp.retryAfterMs(key);
+  if (lockedFor > 0) {
+    rejectLocked(res, lockedFor);
+    return null;
+  }
+
+  if (!(await verifyPassword(password, user.password_hash))) {
+    lockoutByIp.recordFailure(key);
+    lockoutByAccount.recordFailure(user.email.toLowerCase());
+    res.status(401).json(wrong);
+    return null;
+  }
+
+  // Proving the password clears both counters, exactly as a successful
+  // `/continue` does — otherwise a user who fumbled their own password here
+  // would find themselves locked out of signing in afterwards.
+  lockoutByIp.clear(key);
+  lockoutByAccount.clear(user.email.toLowerCase());
+  return user;
 }
 
 type PasswordCheck = { ok: true; value: string } | { ok: false; error: string };
@@ -118,6 +296,25 @@ function validatePassword(password: unknown): PasswordCheck {
   }
   if (password.length > MAX_PASSWORD_LENGTH) {
     return { ok: false, error: `Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.` };
+  }
+  // Byte length, not character length — see `MAX_PASSWORD_BYTES`. The message
+  // says "characters" anyway: nobody typing emoji into a password field is
+  // helped by being told about UTF-8, and the two counts only diverge for
+  // passwords already close to the character cap.
+  if (Buffer.byteLength(password, "utf8") > MAX_PASSWORD_BYTES) {
+    return {
+      ok: false,
+      error: "That password is too long. Try a shorter one, or use fewer emoji.",
+    };
+  }
+  // Lowercased before the lookup: case rules are free to a cracker, so
+  // `Password1` is not a different guess from `password1`. See the note on
+  // COMMON_PASSWORDS for why this list exists at all.
+  if (COMMON_PASSWORDS.has(password.toLowerCase())) {
+    return {
+      ok: false,
+      error: "That password is one of the most commonly used ones. Please choose another.",
+    };
   }
   return { ok: true, value: password };
 }
@@ -180,7 +377,7 @@ authRouter.post(
   asyncRoute(async (req, res) => {
     const { email, password } = req.body ?? {};
 
-    if (typeof email !== "string" || email.length > MAX_EMAIL_LENGTH || !EMAIL_RE.test(email.trim())) {
+    if (!isAcceptableEmail(email)) {
       return res.status(400).json({ error: "Enter a valid email address." });
     }
     if (typeof password !== "string" || password.length === 0) {
@@ -204,6 +401,12 @@ authRouter.post(
     const perIpLockedFor = lockoutByIp.retryAfterMs(perIpKey);
     if (perIpLockedFor > 0) return rejectLocked(res, perIpLockedFor);
 
+    // The sign-up-probe budget, checked before the lookup so that hitting it
+    // costs the same as anything else here. Keyed on the source rather than on
+    // `email|ip`, because it exists to count one caller across many addresses.
+    const probeKey = req.ip ?? "unknown";
+    const probeLockedFor = lockoutBySignUpProbe.retryAfterMs(probeKey);
+
     const user = findUserByEmail(normalized);
     if (!user) {
       // Keep the timing in line with the branch that does hash a password.
@@ -211,9 +414,11 @@ authRouter.post(
       // ...and keep the *cost* in line with it too. Which branch you landed on
       // is unavoidably visible — the flow's whole premise is telling the user
       // whether they're signing in or signing up — so the defence can't be to
-      // hide it, only to make finding out as expensive as guessing a password.
-      // Without this, a mailing list could be walked for free forever.
-      lockoutByIp.recordFailure(perIpKey);
+      // hide it, only to make finding out expensive enough that a mailing list
+      // can't be walked for free. What it must *not* do is charge that cost to
+      // the same counter as a wrong password: see `lockoutBySignUpProbe`.
+      lockoutBySignUpProbe.recordFailure(probeKey);
+      if (probeLockedFor > 0) return rejectLocked(res, probeLockedFor);
 
       // The password rules are checked here, on the branch that is about to
       // create an account, so "Password must be at least 8 characters" is
@@ -265,11 +470,7 @@ authRouter.post(
           "Username must be 3-20 characters and contain only letters, numbers, and underscores.",
       });
     }
-    if (
-      typeof email !== "string" ||
-      email.length > MAX_EMAIL_LENGTH ||
-      !EMAIL_RE.test(email.trim())
-    ) {
+    if (!isAcceptableEmail(email)) {
       return res.status(400).json({ error: "Enter a valid email address." });
     }
 
@@ -390,7 +591,7 @@ authRouter.post(
   asyncRoute(async (req, res) => {
     const { email, code, token } = req.body ?? {};
 
-    if (typeof email !== "string" || email.length > MAX_EMAIL_LENGTH || !EMAIL_RE.test(email.trim())) {
+    if (!isAcceptableEmail(email)) {
       return res.status(400).json({ error: "Enter a valid email address." });
     }
     if (typeof code !== "string" || !CODE_RE.test(code)) {
@@ -485,7 +686,7 @@ authRouter.post(
   asyncRoute(async (req, res) => {
     const { email, token } = req.body ?? {};
 
-    if (typeof email !== "string" || email.length > MAX_EMAIL_LENGTH || !EMAIL_RE.test(email.trim())) {
+    if (!isAcceptableEmail(email)) {
       return res.status(400).json({ error: "Enter a valid email address." });
     }
 
@@ -543,6 +744,238 @@ authRouter.post(
   }),
 );
 
+/**
+ * Step one of recovery: ask for a code.
+ *
+ * Always 202, whatever happens below. Every branch — the address has no
+ * account, the send budget for that inbox is spent, the resend cooldown is
+ * still running, the provider refused — ends in the same response, because any
+ * difference between them is an answer to "does this address have a Snapsher
+ * account?" from an endpoint that needs no password at all.
+ *
+ * A malformed address still gets a 400. That discloses nothing about accounts:
+ * it is a statement about the string, answered identically for an address that
+ * exists and one that doesn't.
+ *
+ * The known-address branch does spend a network round trip that the unknown one
+ * doesn't, so the two are not timing-equal. That is a deliberate non-goal
+ * rather than an oversight: `/continue` already tells any caller which
+ * addresses have accounts, by design, and it does so behind a tighter limiter
+ * than this route's five-an-hour. Equalising here would buy nothing and would
+ * mean holding the response open on a timer for every stranger who mistypes.
+ */
+authRouter.post(
+  "/forgot-password",
+  rateLimit(config.rateLimits.forgotPassword),
+  smallJsonBody,
+  asyncRoute(async (req, res) => {
+    const { email } = req.body ?? {};
+
+    if (!isAcceptableEmail(email)) {
+      return res.status(400).json({ error: "Enter a valid email address." });
+    }
+
+    const normalizedEmail = normalizeEmail(email);
+    const accepted = () => res.status(202).json({ ok: true });
+
+    // Checked first so that asking about an address costs the same budget as
+    // mailing it, on the same reasoning as `/signup`.
+    if (resetSendBudgetByEmail.retryAfterMs(normalizedEmail) > 0) return accepted();
+
+    const user = findUserByEmail(normalizedEmail);
+    if (!user) return accepted();
+
+    // The per-row cooldown, so re-submitting the form can't be used to send as
+    // fast as the rate limiter allows.
+    const now = Date.now();
+    const existing = findPasswordReset(normalizedEmail);
+    if (
+      existing &&
+      existing.expires_at > now &&
+      existing.last_sent_at + config.verification.resendCooldownMs > now
+    ) {
+      return accepted();
+    }
+
+    const code = generateCode();
+
+    // Sent before anything is written, exactly as `/signup` does it: an email
+    // cannot be un-sent, so the write has to be the last thing that can fail.
+    // A failed send leaves no row, starts no cooldown, and — since the response
+    // is the same either way — tells the caller nothing either.
+    const sent = await sendPasswordResetEmail(normalizedEmail, code);
+    if (!sent.ok) return accepted();
+
+    resetSendBudgetByEmail.recordFailure(normalizedEmail);
+    upsertPasswordReset({
+      email: normalizedEmail,
+      userId: user.id,
+      codeHash: hashCode(normalizedEmail, code),
+      now,
+    });
+
+    accepted();
+  }),
+);
+
+/**
+ * Step two: prove the code and set a new password.
+ *
+ * Every failure that isn't a weak password answers with the same
+ * `invalid_code`, including "no reset was ever asked for" and "that address has
+ * no account" — the response must not become the enumeration oracle
+ * `/forgot-password` refuses to be. There is deliberately no `attemptsLeft`
+ * here, unlike `/verify-email`: a count of remaining attempts is itself a
+ * statement that a live reset row exists for the address.
+ *
+ * Success does *not* sign the caller in. A reset is the recovery path for a
+ * compromise, so it ends with every session for that account destroyed and
+ * nobody signed in — including whoever just ran it, who returns to the sign-in
+ * screen and uses the password they chose. Signing them in here would mean the
+ * one flow designed for "someone else may be in this account" ended by minting
+ * a session from an unauthenticated request.
+ */
+authRouter.post(
+  "/reset-password",
+  rateLimit(config.rateLimits.resetPassword),
+  smallJsonBody,
+  asyncRoute(async (req, res) => {
+    const { email, code, newPassword } = req.body ?? {};
+
+    if (!isAcceptableEmail(email)) {
+      return res.status(400).json({ error: "Enter a valid email address." });
+    }
+    if (typeof code !== "string" || !CODE_RE.test(code)) {
+      return res.status(400).json({ error: "Enter the 6-digit code.", code: "invalid_code" });
+    }
+
+    const normalizedEmail = normalizeEmail(email);
+    const invalidCode = () =>
+      res.status(400).json({
+        error: "That code isn't right, or it has expired. Ask for a new one.",
+        code: "invalid_code",
+      });
+
+    const ipLockedFor = lockoutByResetIp.retryAfterMs(req.ip ?? "unknown");
+    if (ipLockedFor > 0) return rejectLocked(res, ipLockedFor);
+
+    const emailLockedFor = lockoutByResetEmail.retryAfterMs(normalizedEmail);
+    if (emailLockedFor > 0) return rejectLocked(res, emailLockedFor);
+
+    const now = Date.now();
+    const reset = findPasswordReset(normalizedEmail);
+    if (!reset || reset.expires_at <= now) return invalidCode();
+
+    if (!codeHashMatches(reset.code_hash, hashCode(normalizedEmail, code))) {
+      lockoutByResetIp.recordFailure(req.ip ?? "unknown");
+      lockoutByResetEmail.recordFailure(normalizedEmail);
+      const attempts = recordResetAttempt(normalizedEmail);
+      if (attempts >= config.verification.maxAttempts) {
+        // Deleted rather than locked, on the same self-healing rule as a
+        // pending sign-up: the owner asks for a new code and carries on,
+        // instead of a dead row sitting there until it expires.
+        deletePasswordReset(normalizedEmail);
+      }
+      return invalidCode();
+    }
+
+    // The password is validated only after the code is proven, so a caller who
+    // hasn't proven it learns nothing about the rules — and so that the
+    // attempt cap counts wrong codes and nothing else. A rejected password
+    // leaves the row alone: the code stays usable and the user simply picks a
+    // better password.
+    const checked = validatePassword(newPassword);
+    if (!checked.ok) return res.status(400).json({ error: checked.error, code: "weak_password" });
+
+    const user = selectUserById.get(reset.user_id) as UserRow | undefined;
+    if (!user) {
+      // The account went away after the code was issued; the cascade should
+      // already have taken this row with it.
+      deletePasswordReset(normalizedEmail);
+      return invalidCode();
+    }
+
+    if (passwordEchoesIdentity(checked.value, user.username, user.email)) {
+      return res.status(400).json({
+        error: "Choose a password that doesn't contain your username or email address.",
+        code: "weak_password",
+      });
+    }
+
+    updatePasswordHash.run(await bcrypt.hash(checked.value, config.bcryptCost), user.id);
+    deletePasswordReset(normalizedEmail);
+
+    // The whole point of the flow: whatever is signed in as this account stops
+    // being signed in as it. A reset is what someone runs *because* they think
+    // another party has their password, and leaving a 30-day session alive
+    // would leave that party exactly where they were.
+    revokeAllSessions(user.id);
+
+    // The owner has just proven control of the inbox, so failures accumulated
+    // against this account by whoever they are recovering from must not be what
+    // keeps them out of the account they have just recovered.
+    lockoutByAccount.clear(normalizedEmail);
+
+    res.status(204).end();
+  }),
+);
+
+/**
+ * Changing a password from inside the account.
+ *
+ * The current password is required for the reason `DELETE /account` requires
+ * it, and the reasoning is stronger here: without it, a lifted session cookie
+ * is enough to change the password and lock the real owner out permanently.
+ *
+ * On success every session for the account is destroyed and a fresh one is
+ * issued to this caller — so the person at the keyboard stays signed in on this
+ * device and is signed out on every other. That combination is the actual
+ * remedy for a phished password or a stolen cookie, and the reason sessions are
+ * a table rather than a signed cookie in the first place.
+ *
+ * Note for the client: the new session carries a new CSRF token, so the token
+ * cookie must be re-read before the next write. `startSession` sets both.
+ */
+authRouter.post(
+  "/password",
+  requireAuth,
+  rateLimit(config.rateLimits.changePassword),
+  smallJsonBody,
+  asyncRoute(async (req, res) => {
+    const { currentPassword, newPassword } = req.body ?? {};
+
+    const user = await reauthenticate(req, res, currentPassword, {
+      missing: "Enter your current password.",
+      wrong: { error: "That password isn't right.", code: "invalid_password" },
+    });
+    if (!user) return;
+
+    const checked = validatePassword(newPassword);
+    if (!checked.ok) return res.status(400).json({ error: checked.error, code: "weak_password" });
+
+    if (passwordEchoesIdentity(checked.value, user.username, user.email)) {
+      return res.status(400).json({
+        error: "Choose a password that doesn't contain your username or email address.",
+        code: "weak_password",
+      });
+    }
+
+    updatePasswordHash.run(await bcrypt.hash(checked.value, config.bcryptCost), user.id);
+
+    // A reset code outstanding right now was minted against the password that
+    // just stopped existing. If the reason for this change is that someone else
+    // asked for one, leaving it live would hand them the account back.
+    deletePasswordResetsForUser(user.id);
+
+    // Order matters: revoke first, then issue. The other way round would delete
+    // the session this response is about to hand out.
+    revokeAllSessions(user.id);
+    startSession(req, res, user.id);
+
+    res.status(204).end();
+  }),
+);
+
 authRouter.post("/logout", (req, res) => {
   endSession(req, res);
   res.status(204).end();
@@ -557,7 +990,8 @@ const MAX_AVATAR_BYTES = 4 * 1024 * 1024;
 authRouter.put(
   "/avatar",
   requireAuth,
-  rateLimit(config.rateLimits.updateAvatar),
+  // Per-account, not per-address — see `authenticatedKey`.
+  rateLimit(config.rateLimits.updateAvatar, authenticatedKey),
   // Arrives as a base64 data URL in the JSON body, same as a post's photo.
   express.json({ limit: "6mb" }),
   asyncRoute(async (req, res) => {
@@ -641,26 +1075,11 @@ authRouter.delete(
   rateLimit(config.rateLimits.deleteAccount),
   smallJsonBody,
   asyncRoute(async (req, res) => {
-    const { password } = req.body ?? {};
-    if (typeof password !== "string" || password.length === 0) {
-      return res.status(400).json({ error: "Enter your password to confirm." });
-    }
-
-    // The row can be gone between `attachSession` resolving it and this handler
-    // running — the same account deleted from a second tab does exactly that.
-    // Without the guard the cast below is a lie and the password check throws a
-    // TypeError, which reaches the client as a 500 and buries a real fault in
-    // the log behind noise.
-    const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.auth!.user.id) as
-      | UserRow
-      | undefined;
-    if (!user) {
-      endSession(req, res);
-      return res.status(401).json({ error: "Please sign in.", code: "not_authenticated" });
-    }
-    if (!(await verifyPassword(password, user.password_hash))) {
-      return res.status(401).json(INVALID_CREDENTIALS);
-    }
+    const user = await reauthenticate(req, res, req.body?.password, {
+      missing: "Enter your password to confirm.",
+      wrong: INVALID_CREDENTIALS,
+    });
+    if (!user) return;
 
     const photoFiles = (
       db.prepare("SELECT photo_file FROM posts WHERE user_id = ?").all(user.id) as Pick<
@@ -669,18 +1088,29 @@ authRouter.delete(
       >[]
     ).map((row) => row.photo_file);
 
-    // The row going away cascades to sessions, posts, likes, comments, and
-    // friend requests (see the ON DELETE CASCADE clauses in db.ts) — only the
-    // files those posts and the avatar point to live outside the database and
-    // need cleaning up by hand, below.
+    // The row going away cascades to sessions, posts, likes, comments, friend
+    // requests and any outstanding password reset (see the ON DELETE CASCADE
+    // clauses in db.ts) — only the files those posts and the avatar point to
+    // live outside the database and need cleaning up by hand, below.
     db.prepare("DELETE FROM users WHERE id = ?").run(user.id);
 
-    await Promise.all([
-      ...(user.avatar_file
-        ? [fs.promises.rm(path.join(avatarsDir, user.avatar_file), { force: true })]
-        : []),
-      ...photoFiles.map((file) => fs.promises.rm(path.join(uploadsDir, file), { force: true })),
-    ]);
+    // Past this line the account is gone, so the request has succeeded and must
+    // say so. Without the catch, an `rm` rejecting with EPERM or EIO (`force`
+    // only swallows ENOENT) turned a completed deletion into a 500: the modal
+    // showed "Something went wrong", re-enabled its form and never fired
+    // `onAccountDeleted`, leaving the user looking at a signed-in shell for an
+    // account that no longer existed. A file left behind is wasted disk that
+    // the hourly sweeper in postsStore collects; it is not a failure to report.
+    try {
+      await Promise.all([
+        ...(user.avatar_file
+          ? [fs.promises.rm(path.join(avatarsDir, user.avatar_file), { force: true })]
+          : []),
+        ...photoFiles.map((file) => fs.promises.rm(path.join(uploadsDir, file), { force: true })),
+      ]);
+    } catch (err) {
+      console.warn(`[auth] could not remove files for deleted account ${user.id}`, err);
+    }
 
     endSession(req, res);
     res.status(204).end();

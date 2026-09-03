@@ -34,6 +34,13 @@ type PostInteractionsProps = {
   isOwner: boolean;
   likeCount?: number;
   commentCount: number;
+  /**
+   * Fires after a comment is added or deleted, so the caller can refetch the
+   * lists these counts came from. Without it a comment left on your own post
+   * from the feed never reaches the badge on the profile grid, which keeps
+   * showing the count it was mounted with for the rest of the session.
+   */
+  onCountsChanged?: () => void;
 };
 
 /**
@@ -51,6 +58,7 @@ export function PostInteractions({
   isOwner,
   likeCount: initialLikeCount,
   commentCount: initialCommentCount,
+  onCountsChanged,
 }: PostInteractionsProps) {
   const [liked, setLiked] = useState(likedByMe);
   const [likeCount, setLikeCount] = useState(initialLikeCount ?? 0);
@@ -76,6 +84,20 @@ export function PostInteractions({
    * on the next refetch.
    */
   const [commentCount, setCommentCount] = useState(initialCommentCount);
+
+  /**
+   * The three values above are seeded from props and then owned locally, so
+   * that a tap updates them without waiting for a round trip. That made them
+   * *deaf* to props: `PostCard` is keyed on `post.id`, so a refetched feed
+   * reuses this instance, and every count the server had just corrected was
+   * silently discarded. Re-seeding when the props themselves change keeps both
+   * — instant local updates, and a refetch that still means something.
+   */
+  useEffect(() => {
+    setLiked(likedByMe);
+    setLikeCount(initialLikeCount ?? 0);
+    setCommentCount(initialCommentCount);
+  }, [likedByMe, initialLikeCount, initialCommentCount]);
 
   useEffect(() => {
     if (!likersOpen) return;
@@ -162,6 +184,7 @@ export function PostInteractions({
       setComments((current) => [...(current ?? []), created]);
       setCommentCount((count) => count + 1);
       setDraft("");
+      onCountsChanged?.();
     } catch (err) {
       setCommentsError(err instanceof Error ? err.message : "Couldn't post that comment.");
     } finally {
@@ -175,6 +198,7 @@ export function PostInteractions({
     setCommentCount((count) => count - 1);
     try {
       await deleteComment(postId, comment.id);
+      onCountsChanged?.();
     } catch (err) {
       // Put it back rather than leave the thread asserting a deletion the
       // server never performed.

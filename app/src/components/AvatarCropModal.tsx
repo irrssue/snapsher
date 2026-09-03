@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckIcon, CloseIcon } from "./icons";
 import { useBodyScrollLock, useDialogFocus } from "../hooks";
+import { TOO_MANY_PIXELS_MESSAGE, withinPixelBudget } from "../images";
 
 /** Largest on-screen size of the square crop viewport. */
 const MAX_VIEWPORT = 288;
@@ -124,6 +125,15 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
       setLoadError("Couldn't read that photo. Try a different one.");
       return;
     }
+    // Refused here rather than at export time: leaving `frame` and
+    // `naturalSize` null keeps Confirm disabled, so `drawImage` — which would
+    // allocate a second copy of a bitmap already too big to hold — is never
+    // reached. The picker's size check can't catch this one; a 3MB PNG can
+    // decode to well over a gigabyte.
+    if (!withinPixelBudget(naturalWidth, naturalHeight)) {
+      setLoadError(TOO_MANY_PIXELS_MESSAGE);
+      return;
+    }
     setLoadError(null);
     setNaturalSize({ width: naturalWidth, height: naturalHeight });
     fitToWindow();
@@ -188,32 +198,43 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
     setDragging(false);
   }
 
-  // Memoised only so the wheel effect below can depend on it honestly rather
-  // than close over a stale copy; the slider calls the same function.
-  const rescale = useCallback(
-    (nextScale: number) => {
-      const img = imgRef.current;
-      if (!frame || !img) return;
-      const { naturalWidth, naturalHeight } = img;
-      // Keep the point at the viewport's center fixed in image-space while the
-      // zoom level changes, instead of re-centering on every slider nudge.
-      const centerX = (viewport / 2 - frame.left) / frame.scale;
-      const centerY = (viewport / 2 - frame.top) / frame.scale;
-      setFrame(
-        clampFrame(
-          {
-            scale: nextScale,
-            left: viewport / 2 - centerX * nextScale,
-            top: viewport / 2 - centerY * nextScale,
-          },
-          naturalWidth,
-          naturalHeight,
-          viewport,
-        ),
-      );
-    },
-    [frame, viewport],
-  );
+  /**
+   * Everything the wheel handler needs to read, mirrored where it can be read
+   * without being closed over. A handler that captures `frame` directly has to
+   * be torn down and re-attached every time the frame changes — which is once
+   * per pointer move of a drag, hundreds of add/removeEventListener pairs for
+   * a single gesture. Synced in an effect rather than during render so the
+   * mirror is only ever updated from a committed value.
+   */
+  const zoomRef = useRef({ frame, minScale, viewport });
+  useEffect(() => {
+    zoomRef.current = { frame, minScale, viewport };
+  }, [frame, minScale, viewport]);
+
+  // Reads its inputs through the ref above so it can be stable, which is what
+  // lets the wheel listener subscribe once. The slider calls the same function.
+  const rescale = useCallback((nextScale: number) => {
+    const img = imgRef.current;
+    const { frame: current, viewport: box } = zoomRef.current;
+    if (!current || !img) return;
+    const { naturalWidth, naturalHeight } = img;
+    // Keep the point at the viewport's center fixed in image-space while the
+    // zoom level changes, instead of re-centering on every slider nudge.
+    const centerX = (box / 2 - current.left) / current.scale;
+    const centerY = (box / 2 - current.top) / current.scale;
+    setFrame(
+      clampFrame(
+        {
+          scale: nextScale,
+          left: box / 2 - centerX * nextScale,
+          top: box / 2 - centerY * nextScale,
+        },
+        naturalWidth,
+        naturalHeight,
+        box,
+      ),
+    );
+  }, []);
 
   /**
    * Wheel-zoom has to be a hand-attached native listener rather than an
@@ -222,27 +243,26 @@ export function AvatarCropModal({ imageUrl, onCancel, onConfirm }: AvatarCropMod
    * silent no-op — the image zoomed and the page behind the modal scrolled at
    * the same time, logging a console warning on every notch. `passive: false`
    * is the only thing that can cancel the scroll.
-   *
-   * Re-subscribing whenever the zoom inputs change is deliberate: the handler
-   * reads `frame` and `minScale`, so the listener and the function it calls
-   * always agree about the current zoom.
    */
   useEffect(() => {
     // Named for the element, not the `viewport` size above it, which is a
     // number and would otherwise be shadowed here.
     const node = viewportRef.current;
-    if (!node || !frame) return;
+    if (!node) return;
 
     function onWheel(e: WheelEvent) {
-      if (!frame) return;
+      const { frame: current, minScale: min } = zoomRef.current;
+      // No frame yet means the photo hasn't been measured, so there is no zoom
+      // to change — and no reason to swallow the page's scroll either.
+      if (!current) return;
       e.preventDefault();
-      const maxScale = minScale * MAX_ZOOM_MULTIPLIER;
-      rescale(Math.min(maxScale, Math.max(minScale, frame.scale * (1 - e.deltaY * 0.001))));
+      const maxScale = min * MAX_ZOOM_MULTIPLIER;
+      rescale(Math.min(maxScale, Math.max(min, current.scale * (1 - e.deltaY * 0.001))));
     }
 
     node.addEventListener("wheel", onWheel, { passive: false });
     return () => node.removeEventListener("wheel", onWheel);
-  }, [frame, minScale, rescale]);
+  }, [rescale]);
 
   function handleConfirm() {
     const img = imgRef.current;

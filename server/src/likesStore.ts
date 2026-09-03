@@ -41,12 +41,17 @@ const insertLike = db.prepare(
 );
 const deleteLike = db.prepare("DELETE FROM likes WHERE post_id = ? AND user_id = ?");
 const countLikes = db.prepare("SELECT COUNT(*) AS count FROM likes WHERE post_id = ?");
+// `likes` has no id of its own — the (post_id, user_id) pair is the key — so
+// `user_id` is what breaks a tie on `created_at`. Two taps inside the same
+// millisecond are otherwise ordered however SQLite happens to return them,
+// which is stable in practice and guaranteed nowhere: cosmetic while this list
+// is whole, wrong the moment anything pages through it.
 const selectLikers = db.prepare(`
   SELECT users.id, users.username, users.avatar_file
     FROM likes
     JOIN users ON users.id = likes.user_id
    WHERE likes.post_id = ?
-   ORDER BY likes.created_at DESC
+   ORDER BY likes.created_at DESC, likes.user_id DESC
 `);
 
 /** Same audience as the feed itself — a post's author or one of their friends. */

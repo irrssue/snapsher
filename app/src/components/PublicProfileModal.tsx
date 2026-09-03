@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { CloseIcon, PersonIcon } from "./icons";
 import { useBodyScrollLock, useDialogFocus } from "../hooks";
 import { fetchUserProfile, fetchUserPosts, type PublicProfile } from "../api/friends";
+import { ApiError } from "../api/http";
 import { PostGrid } from "./PostGrid";
 import type { PostSummary } from "../types";
 
@@ -14,13 +15,18 @@ type PublicProfileModalProps = {
  * Any other user's profile, as seen by someone who isn't its owner: avatar,
  * username, post count, and their post grid. No friends count here on
  * purpose — per `about.md`, that number is only ever shown to the account
- * owner themself. The grid itself has no such restriction: any signed-in
- * member may browse it, friend or not.
+ * owner themself.
+ *
+ * The header is public; the photos are not. A stranger gets the avatar,
+ * username and post count — enough to recognise who they found — and a locked
+ * grid in place of the photos.
  */
 export function PublicProfileModal({ userId, onClose }: PublicProfileModalProps) {
   const [profile, setProfile] = useState<PublicProfile | null>(null);
   const [posts, setPosts] = useState<PostSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
+  /** The grid is friends-only and this viewer isn't one — a state, not a failure. */
+  const [locked, setLocked] = useState(false);
   const dialogRef = useDialogFocus<HTMLDivElement>();
 
   useBodyScrollLock();
@@ -30,6 +36,7 @@ export function PublicProfileModal({ userId, onClose }: PublicProfileModalProps)
     setProfile(null);
     setPosts([]);
     setError(null);
+    setLocked(false);
     fetchUserProfile(userId)
       .then((next) => {
         if (active) setProfile(next);
@@ -43,8 +50,17 @@ export function PublicProfileModal({ userId, onClose }: PublicProfileModalProps)
       .then((next) => {
         if (active) setPosts(next);
       })
-      .catch(() => {
-        // The grid just stays empty — not worth its own error message here.
+      .catch((err) => {
+        // Photos are friends-only, so a 403 here is the ordinary answer for
+        // someone you haven't added — not an error, and emphatically not the
+        // "No posts yet." an empty grid would otherwise claim about a profile
+        // that may be full of them.
+        if (active && err instanceof ApiError && err.code === "not_friends") {
+          setLocked(true);
+          return;
+        }
+        // Anything else: the grid just stays empty — not worth its own error
+        // message beside a header that loaded fine.
       });
     return () => {
       active = false;
@@ -122,7 +138,13 @@ export function PublicProfileModal({ userId, onClose }: PublicProfileModalProps)
 
               <span className="text-sm text-neutral-300">{profile.postCount} posts</span>
 
-              <PostGrid posts={posts} username={profile.username} avatarUrl={profile.avatarUrl} />
+              {locked ? (
+                <p className="break-words py-8 text-center text-sm text-neutral-400">
+                  Add @{profile.username} as a friend to see their photos.
+                </p>
+              ) : (
+                <PostGrid posts={posts} username={profile.username} avatarUrl={profile.avatarUrl} />
+              )}
             </>
           )}
         </div>

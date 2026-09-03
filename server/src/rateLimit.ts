@@ -69,26 +69,53 @@ function clientKey(req: Request): string {
   return req.ip ?? req.socket.remoteAddress ?? "unknown";
 }
 
+/**
+ * Key for a limiter on a route that already requires a session.
+ *
+ * IP alone is the wrong unit for an authenticated write: a household, a campus,
+ * an office or anything behind CGNAT shares one address, so ten posts an hour
+ * was ten posts an hour *for everyone on that NAT together* — the first user to
+ * hit it locked out people they've never met. The account is the thing the
+ * budget is actually about (posting, commenting and avatar changes are all
+ * per-account acts, and the 12-hour rule is enforced per account anyway), and an
+ * attacker who wants a second bucket has to complete a whole verified sign-up
+ * to get one.
+ *
+ * The IP fallback covers the ordering hazard rather than a real case: every
+ * route using this sits behind `requireAuth`, but a limiter mounted before it
+ * would otherwise collapse every anonymous caller into one shared key, which is
+ * the failure this function exists to avoid. Prefixes keep the two key spaces
+ * from ever colliding.
+ */
+export function authenticatedKey(req: Request): string {
+  const userId = req.auth?.user.id;
+  return userId === undefined ? `ip:${clientKey(req)}` : `user:${userId}`;
+}
+
 function tooMany(res: Response, resetAt: number, message: string) {
   const retryAfter = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));
   res.setHeader("Retry-After", String(retryAfter));
   res.status(429).json({ error: message, code: "rate_limited", retryAfter });
 }
 
-export function rateLimit({
-  windowMs,
-  max,
-  message = "Too many requests. Please slow down and try again shortly.",
-}: {
-  windowMs: number;
-  max: number;
-  message?: string;
-}): RequestHandler {
+export function rateLimit(
+  {
+    windowMs,
+    max,
+    message = "Too many requests. Please slow down and try again shortly.",
+  }: {
+    windowMs: number;
+    max: number;
+    message?: string;
+  },
+  /** How a caller is identified. Defaults to their address; see `authenticatedKey`. */
+  keyOf: (req: Request) => string = clientKey,
+): RequestHandler {
   const store = new Map<string, Window>();
   sweep(store);
 
   return (req, res, next) => {
-    const key = clientKey(req);
+    const key = keyOf(req);
     const now = Date.now();
     const entry = store.get(key);
 

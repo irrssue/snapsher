@@ -114,6 +114,19 @@ export const config = {
     updateAvatar: { windowMs: HOUR, max: 20 },
     /** A password-guessing surface, same shape as sign-in — kept just as tight. */
     deleteAccount: { windowMs: 15 * MINUTE, max: 10 },
+    /** Changing a password re-checks the current one, so it is the same guessing surface as deleting the account. Same budget. */
+    changePassword: { windowMs: 15 * MINUTE, max: 10 },
+    /**
+     * Asking for a reset code. Tighter than anything else here because each
+     * accepted call makes this server send mail to an address the caller names
+     * and does not have to prove it owns — the same weapon `/signup` is, minus
+     * the username step that slows a script down. Five an hour per source is
+     * more than anyone forgetting a password twice needs; the address-keyed
+     * `lockout.verificationSend` is what bounds it for a caller rotating IPs.
+     */
+    forgotPassword: { windowMs: HOUR, max: 5 },
+    /** Submitting a reset code — the same shape as `verifyEmail`, which is the same act against a different table. */
+    resetPassword: { windowMs: 15 * MINUTE, max: 20 },
     /**
      * Sending a request is otherwise unbounded: the 409 that stops a repeat
      * send is cleared by cancelling the request, and cancelling is something
@@ -166,6 +179,25 @@ export const config = {
   lockout: {
     perIp: { maxFailures: 5, windowMs: 15 * MINUTE, lockMs: 15 * MINUTE },
     perAccount: { maxFailures: 50, windowMs: HOUR, lockMs: HOUR },
+    /**
+     * `/continue` landing on the "no account here" branch.
+     *
+     * This is charged on the *happy path of every sign-up*, not on a failure,
+     * which is why it can't share `perIp`'s counter: at 5 per 15 minutes a new
+     * user hit "Too many failed attempts" after five taps through a flow they
+     * had not got wrong once — back-navigating to fix a typo'd address, an
+     * expired code sending them round again, a username already taken. Worse,
+     * `perIp` is only ever cleared by a successful *sign-in*, which an address
+     * with no account can never produce, so the lock stood for its full window.
+     *
+     * It still has to cost something. Which branch a caller landed on is
+     * unavoidably visible — the flow's premise is telling the user whether they
+     * are signing in or signing up — so what stops a mailing list being walked
+     * for free is that every probe costs a bcrypt hash and counts here. Forty
+     * an hour is roughly ten sign-up attempts' worth of headroom for a real
+     * person and nowhere near enough to enumerate anything.
+     */
+    signUpProbe: { maxFailures: 40, windowMs: HOUR, lockMs: 30 * MINUTE },
     /**
      * Wrong verification codes. A pending sign-up already destroys itself after
      * `verification.maxAttempts` wrong codes (see verificationStore.ts), so the
@@ -266,18 +298,31 @@ if (isProd && !config.email.resendApiKey) {
 }
 
 /**
- * Unset, the origin check in security.ts falls back to comparing the request's
- * `Origin` against its own `Host` — two headers written by the same sender.
- * A browser won't let script forge `Host`, which is what keeps that from being
- * exploitable today, but it is the only CSRF defence in front of sign-in and
- * sign-up (no session yet, so no token to demand) and it rests entirely on the
- * tunnel not rewriting `Host`. Warned about rather than enforced for the same
- * reason as the fallback exists: an unset value must degrade, not lock everyone
- * out.
+ * Unset, the origin check in security.ts used to fall back to comparing the
+ * request's `Origin` against its own `Host` — two headers written by the same
+ * sender. A browser won't let script forge `Host`, which is what kept that from
+ * being exploitable, but it is the only CSRF defence in front of sign-in and
+ * sign-up (no session yet, so no token to demand) and it rested entirely on the
+ * tunnel not rewriting `Host`.
+ *
+ * In production that fallback is now refused outright rather than warned about:
+ * `pm2 restart` preserves stale env and drops new variables, so "the operator
+ * forgot" and "the deploy silently lost it" look identical from in here, and the
+ * degraded state is one where every write is protected by nothing. Development
+ * keeps the fallback — there is no tunnel, no `PUBLIC_HOST`, and localhost has
+ * no sibling host to attack from.
  */
-if (isProd && !config.publicHost) {
+if (isProd && !config.publicHost && clientOrigins.length === 0) {
+  console.error(
+    "\n" +
+      "!!  [config] Neither PUBLIC_HOST nor CLIENT_ORIGIN is set in production.\n" +
+      "!!  The origin check has nothing it can trust to compare against, so every\n" +
+      "!!  state-changing request will be refused with origin_unconfigured until one\n" +
+      "!!  of them is set. Set PUBLIC_HOST to the host this app is reached at.\n",
+  );
+} else if (isProd && !config.publicHost) {
   console.warn(
-    "[config] PUBLIC_HOST is unset in production — the origin check falls back to the Host header, which the sender also controls.",
+    "[config] PUBLIC_HOST is unset in production — only the CLIENT_ORIGIN allowlist is enforcing the origin check.",
   );
 }
 

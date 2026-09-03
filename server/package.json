@@ -12,12 +12,12 @@
     "better-sqlite3": "^13.0.3",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
-    "express": "^4.21.2"
+    "express": "^5.2.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
     "@types/cors": "^2.8.17",
-    "@types/express": "^4.17.21",
+    "@types/express": "^5.0.6",
     "@types/node": "^24.13.3",
     "tsx": "^4.19.2",
     "typescript": "~6.0.2"

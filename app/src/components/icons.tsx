@@ -71,23 +71,6 @@ export function SearchIcon({ className }: { className?: string }) {
   );
 }
 
-export function PencilIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      <path d="m16.5 3.5 4 4L8 20H4v-4L16.5 3.5Z" />
-    </svg>
-  );
-}
-
 export function GearIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -135,25 +118,6 @@ export function CheckIcon({ className }: { className?: string }) {
       aria-hidden="true"
     >
       <path d="M5 12.5l4.5 4.5L19 7" />
-    </svg>
-  );
-}
-
-export function UserPlusIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden="true"
-    >
-      <circle cx="9" cy="8" r="4" fill="currentColor" stroke="none" />
-      <path d="M2 20c0-4 3.1-6.5 7-6.5s7 2.5 7 6.5" />
-      <path d="M18 8v6M15 11h6" />
     </svg>
   );
 }

@@ -1,5 +1,5 @@
 import type { User } from "../types";
-import { api } from "./http";
+import { api, expectNumber, expectObject } from "./http";
 
 export type AuthCredentials = {
   email: string;
@@ -8,18 +8,20 @@ export type AuthCredentials = {
 
 /**
  * The email-first step. The server either signs the user in outright or tells
- * us the address is free and the flow should move on to picking a username —
- * one request, so an unknown address can't be probed without a password.
+ * us the address is free and the flow should move on to picking a username.
  */
 export type ContinueResult = { user: User } | { needsUsername: true };
 
 export async function continueWithCredentials(
   credentials: AuthCredentials,
 ): Promise<ContinueResult> {
-  return api<ContinueResult>("/api/auth/continue", {
+  const result = await api<ContinueResult>("/api/auth/continue", {
     method: "POST",
     body: credentials,
   });
+  expectObject<ContinueResult>(result, "continue result");
+  if ("user" in result) expectObject<User>(result.user, "signed-in user");
+  return result;
 }
 
 /**
@@ -38,10 +40,15 @@ export type SignupPending = { pending: true; token: string; resendInMs: number; 
 export async function signup(
   credentials: AuthCredentials & { username: string },
 ): Promise<SignupPending> {
-  return api<SignupPending>("/api/auth/signup", {
+  const result = await api<SignupPending>("/api/auth/signup", {
     method: "POST",
     body: credentials,
   });
+  // Without a token every later step of this sign-up 400s, so a body missing it
+  // has to fail here rather than one screen later on the code form.
+  expectObject<SignupPending>(result, "pending sign-up");
+  expectNumber(result.resendInMs, "pending sign-up resendInMs");
+  return result;
 }
 
 export async function verifyEmail(input: { email: string; code: string; token: string }): Promise<User> {
@@ -49,26 +56,67 @@ export async function verifyEmail(input: { email: string; code: string; token: s
     method: "POST",
     body: input,
   });
-  return user;
+  return expectObject<User>(user, "verified user");
 }
 
 export type ResendResult = { resendInMs: number; expiresInMs: number };
 
 export async function resendCode(input: { email: string; token: string }): Promise<ResendResult> {
-  return api<ResendResult>("/api/auth/resend-code", {
+  const result = await api<ResendResult>("/api/auth/resend-code", {
     method: "POST",
     body: input,
   });
+  expectNumber(result?.resendInMs, "resend result");
+  return result;
 }
 
+/**
+ * Rejects when the server didn't end the session. The failure used to be
+ * swallowed while the UI signed out locally anyway — so a log-out during a
+ * network blip left the `sid` row alive and the cookie in place, and the next
+ * person to open the tab was signed straight back in.
+ */
 export async function logout(): Promise<void> {
-  // A failure here still ends the session locally; the cookie is what matters
-  // and the server clears it on any successful call.
-  await api("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+  await api("/api/auth/logout", { method: "POST" });
 }
 
 export async function deleteAccount(password: string): Promise<void> {
   await api("/api/auth/account", { method: "DELETE", body: { password } });
+}
+
+/**
+ * Succeeding here revokes every other session for this account and issues a
+ * fresh one for this device — so a password change is also the way to sign a
+ * lost or borrowed device out, and this tab stays signed in.
+ */
+export async function changePassword(input: {
+  currentPassword: string;
+  newPassword: string;
+}): Promise<void> {
+  await api("/api/auth/password", { method: "POST", body: input });
+}
+
+/**
+ * Always resolves for a well-formed address, whether or not it has an account
+ * — the response is identical either way, so this can't be used to test who is
+ * a member. The UI has to say "if that address has an account" for the same
+ * reason.
+ */
+export async function requestPasswordReset(email: string): Promise<void> {
+  await api("/api/auth/forgot-password", { method: "POST", body: { email } });
+}
+
+/**
+ * A reset is the recovery path for a compromised account, so it ends every
+ * session including any the attacker holds — and deliberately does not sign the
+ * caller in. The client sends them back to the sign-in screen afterwards.
+ */
+export async function resetPassword(input: {
+  email: string;
+  code: string;
+  newPassword: string;
+}): Promise<void> {
+  await api("/api/auth/reset-password", { method: "POST", body: input });
 }
 
 export async function updateAvatar(photo: string): Promise<User> {
@@ -76,7 +124,7 @@ export async function updateAvatar(photo: string): Promise<User> {
     method: "PUT",
     body: { photo },
   });
-  return user;
+  return expectObject<User>(user, "updated user");
 }
 
 export async function fetchCurrentUser(): Promise<User | null> {
@@ -84,7 +132,7 @@ export async function fetchCurrentUser(): Promise<User | null> {
     const { user } = await api<{ user: User }>("/api/auth/me", {
       silenceSessionExpiry: true,
     });
-    return user;
+    return expectObject<User>(user, "current user");
   } catch {
     return null;
   }

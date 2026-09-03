@@ -1,0 +1,38 @@
+# Agent and editor state. `.claude/settings.local.json` carries an ssh
+# allowlist and the homeserver's internal hostname; it was only ever excluded
+# through `.git/info/exclude`, which is local to one clone — a fresh checkout
+# plus `git add .` would have committed it.
+.claude/
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Runtime data, never source: the SQLite file (plus its WAL/SHM siblings),
+# uploaded photos and avatars, and anything holding secrets.
+server/data.db
+server/data.db-*
+server/uploads/
+.env
+.env.*
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

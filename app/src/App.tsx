@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { NavBar } from "./components/NavBar";
 import { PostCard } from "./components/PostCard";
 import { FriendsTab } from "./components/FriendsTab";
@@ -17,7 +17,9 @@ import {
   continueWithCredentials,
   fetchCurrentUser,
   logout,
+  requestPasswordReset,
   resendCode,
+  resetPassword,
   signup,
   verifyEmail,
 } from "./api/auth";
@@ -25,6 +27,19 @@ import { createPost, fetchPosts, fetchQuota } from "./api/posts";
 import { fetchFriends, fetchUserPosts, removeFriend, type Friend } from "./api/friends";
 import { ApiError, onSessionExpired } from "./api/http";
 import type { Post, PostSummary, User } from "./types";
+
+/**
+ * The friend list arrives ordered by `username COLLATE NOCASE` — an ASCII
+ * case-fold, which this reproduces exactly. Used when a failed removal has to
+ * put someone back: appending them dropped the restored friend at the bottom of
+ * a list that is sorted everywhere else, which reads as a second bug on top of
+ * the first.
+ */
+function byUsernameNoCase(a: Friend, b: Friend): number {
+  const left = a.username.toLowerCase();
+  const right = b.username.toLowerCase();
+  return left < right ? -1 : left > right ? 1 : 0;
+}
 
 /**
  * Everything behind the sign-in wall. Mounted with `key={user.id}` so switching
@@ -38,7 +53,7 @@ function SignedInApp({
   onAvatarChange,
 }: {
   user: User;
-  onLogout: () => void;
+  onLogout: () => Promise<void>;
   onAccountDeleted: () => void;
   onAvatarChange: (user: User) => void;
 }) {
@@ -46,8 +61,14 @@ function SignedInApp({
   const [posts, setPosts] = useState<Post[]>([]);
   const [loadingFeed, setLoadingFeed] = useState(true);
   const [feedError, setFeedError] = useState<string | null>(null);
-  /** Null means the posting window is unknown, not that posting is allowed. */
-  const [nextAllowedAt, setNextAllowedAt] = useState<number | null>(null);
+  /**
+   * Three states. `undefined` is "the quota call hasn't answered yet", `null`
+   * is "it answered and we couldn't use it" — collapsing them made the failure
+   * message the first thing every session showed while the request was still
+   * perfectly in flight. A number is the window itself; never a licence to post
+   * without comparing it to the clock.
+   */
+  const [nextAllowedAt, setNextAllowedAt] = useState<number | null | undefined>(undefined);
   /**
    * How far this device's clock sits from the server's, measured once per quota
    * fetch. `nextAllowedAt` is an absolute timestamp taken from the server, so
@@ -68,6 +89,17 @@ function SignedInApp({
   const [viewingUserId, setViewingUserId] = useState<number | null>(null);
 
   /**
+   * Each refresh below can be started from several places at once — mount,
+   * accepting a request, removing a friend — and nothing makes the responses
+   * come back in the order they were asked for. A counter bumped on the way in
+   * and checked on the way out means only the newest call is allowed to write,
+   * so a slow earlier one can't reinstate the state it was sent to replace.
+   */
+  const feedGeneration = useRef(0);
+  const friendsGeneration = useRef(0);
+  const myPostsGeneration = useRef(0);
+
+  /**
    * Also run whenever a friendship changes — accepting a request in
    * `FriendsTab` or removing someone in the friends popup — so this feed picks
    * up who it should contain without either of those siblings remounting it.
@@ -75,9 +107,11 @@ function SignedInApp({
    * stay on screen with their photos 404ing.
    */
   const refreshFeed = useCallback(async () => {
+    const generation = ++feedGeneration.current;
     // `allSettled`, not `all`: these two fail independently, and a 500 from the
     // quota endpoint used to take a perfectly good feed down with it.
     const [postsResult, quotaResult] = await Promise.allSettled([fetchPosts(), fetchQuota()]);
+    if (generation !== feedGeneration.current) return;
 
     if (postsResult.status === "fulfilled") {
       setPosts(postsResult.value);
@@ -104,8 +138,10 @@ function SignedInApp({
    * are always re-run together after anything that changes who's a friend.
    */
   const refreshFriends = useCallback(async () => {
+    const generation = ++friendsGeneration.current;
     try {
-      setFriends(await fetchFriends());
+      const next = await fetchFriends();
+      if (generation === friendsGeneration.current) setFriends(next);
     } catch {
       // Not worth surfacing on its own — the count and popup just stay stale
       // until the next successful refresh.
@@ -113,8 +149,10 @@ function SignedInApp({
   }, []);
 
   const refreshMyPosts = useCallback(async () => {
+    const generation = ++myPostsGeneration.current;
     try {
-      setMyPosts(await fetchUserPosts(user.id));
+      const next = await fetchUserPosts(user.id);
+      if (generation === myPostsGeneration.current) setMyPosts(next);
     } catch {
       // The grid just stays stale/empty until the next successful refresh.
     }
@@ -141,14 +179,34 @@ function SignedInApp({
     setFriends((current) => current.filter((f) => f.id !== friend.id));
     try {
       await removeFriend(friend.id);
-      // Their posts have to leave the feed along with them.
+      // Their posts have to leave the feed along with them — and the grid too,
+      // since the comment and like counts on your own photos just lost
+      // everything this person had left on them.
       refreshFeed();
+      refreshMyPosts();
     } catch (err) {
       // The server still has the friendship, so put them back rather than
       // leaving the popup asserting a removal that never happened.
-      setFriends((current) => (current.some((f) => f.id === friend.id) ? current : [...current, friend]));
+      setFriends((current) =>
+        current.some((f) => f.id === friend.id)
+          ? current
+          : [...current, friend].sort(byUsernameNoCase),
+      );
       setFriendsPopupError(err instanceof Error ? err.message : "Couldn't remove that friend.");
     }
+  }
+
+  /**
+   * A deleted post leaves both lists and drops the count, but deliberately
+   * does not touch `nextAllowedAt`: the server tracks the posting window on the
+   * user row rather than on the posts table, precisely so deleting the most
+   * recent photo can't buy another turn. Refetching the quota here would only
+   * confirm a number that hasn't moved.
+   */
+  function handlePostDeleted(postId: string) {
+    setPosts((current) => current.filter((post) => post.id !== postId));
+    setMyPosts((current) => current.filter((post) => post.id !== postId));
+    setPostCount((current) => Math.max(0, current - 1));
   }
 
   async function handleShare(input: { photo: string; description: string }) {
@@ -200,7 +258,10 @@ function SignedInApp({
         {view === "home" ? (
           <div className="flex w-full max-w-md flex-col gap-10 md:max-w-none md:gap-16">
             {posts.map((post) => (
-              <PostCard key={post.id} post={post} />
+              // The grid's counts come from a different call than the feed's,
+              // so a comment left here has to send the other one back for a
+              // fresh copy or the badge on the profile stays a comment behind.
+              <PostCard key={post.id} post={post} onCountsChanged={refreshMyPosts} />
             ))}
             {feedError && (
               <p className="text-center text-sm text-red-400">{feedError}</p>
@@ -241,7 +302,13 @@ function SignedInApp({
 
             <Countdown nextAllowedAt={nextAllowedAt} clockOffset={clockOffset} />
 
-            <PostGrid posts={myPosts} username={user.username} avatarUrl={user.avatarUrl} />
+            <PostGrid
+              posts={myPosts}
+              username={user.username}
+              avatarUrl={user.avatarUrl}
+              onPostDeleted={handlePostDeleted}
+              onCountsChanged={refreshMyPosts}
+            />
           </div>
         )}
       </main>
@@ -282,20 +349,33 @@ function SignedInApp({
 }
 
 /**
- * Widens once the username step succeeds, so the code step and a resend both
- * know who they're verifying without asking again. `token` is the pending
- * sign-up's possession proof from the server — required on every later
- * request for it, but never shown to the user and not the 6-digit code.
+ * What the auth flow carries between its steps. Deliberately *not* the
+ * password: that used to live here too, for the whole session, long after the
+ * one request that needed it — see `pendingPassword` below.
+ *
+ * `token` is the pending sign-up's possession proof from the server — required
+ * on every later request for it, but never shown to the user and not the
+ * 6-digit code.
  */
-type PendingSignup = AuthCredentialsData & { username?: string; token?: string };
+type PendingIdentity = { email: string; username?: string; token?: string };
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
   const [authStep, setAuthStep] = useState<AuthStep>("credentials");
-  const [pendingCredentials, setPendingCredentials] =
-    useState<PendingSignup | null>(null);
+  const [pendingIdentity, setPendingIdentity] = useState<PendingIdentity | null>(null);
+  /**
+   * Held for exactly one hop: the address is free, so the user is sent to pick
+   * a username, and the password they typed on the previous screen has to
+   * survive that step to reach `signup`. Cleared the instant the sign-up is
+   * accepted and on every other way out of the flow — a plaintext password
+   * sitting in component state for the life of the tab is readable in any heap
+   * snapshot, long after nothing needs it.
+   */
+  const [pendingPassword, setPendingPassword] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  /** Something that went right and still needs saying — a sent code, a changed password. */
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [authSubmitting, setAuthSubmitting] = useState(false);
   /** Absolute timestamp for when the resend button re-enables; null while no code has been sent yet. */
   const [resendAt, setResendAt] = useState<number | null>(null);
@@ -308,6 +388,15 @@ function App() {
       .finally(() => setCheckingSession(false));
   }, []);
 
+  /** Everything the auth flow holds, dropped at once. */
+  const clearAuthState = useCallback(() => {
+    setAuthStep("credentials");
+    setPendingIdentity(null);
+    setPendingPassword(null);
+    setResendAt(null);
+    setAuthNotice(null);
+  }, []);
+
   /**
    * A session can end while the app is open — it expires, or it's signed out
    * elsewhere. Without this the UI keeps showing a signed-in shell whose every
@@ -317,23 +406,24 @@ function App() {
   useEffect(() => {
     const unsubscribe = onSessionExpired(() => {
       setUser(null);
-      setAuthStep("credentials");
-      setPendingCredentials(null);
-      setResendAt(null);
+      clearAuthState();
       setAuthError("Your session has ended. Please sign in again.");
     });
     return () => unsubscribe();
-  }, []);
+  }, [clearAuthState]);
 
   async function handleCredentialsSubmit(data: AuthCredentialsData) {
     setAuthError(null);
+    setAuthNotice(null);
     setAuthSubmitting(true);
     try {
       const result = await continueWithCredentials(data);
       if ("user" in result) {
+        setPendingPassword(null);
         setUser(result.user);
       } else {
-        setPendingCredentials(data);
+        setPendingIdentity({ email: data.email });
+        setPendingPassword(data.password);
         setAuthStep("username");
       }
     } catch (err) {
@@ -344,12 +434,20 @@ function App() {
   }
 
   async function handleUsernameSubmit(username: string) {
-    if (!pendingCredentials) return;
+    if (!pendingIdentity || pendingPassword === null) return;
     setAuthError(null);
     setAuthSubmitting(true);
     try {
-      const result = await signup({ ...pendingCredentials, username });
-      setPendingCredentials({ ...pendingCredentials, username, token: result.token });
+      const result = await signup({
+        email: pendingIdentity.email,
+        password: pendingPassword,
+        username,
+      });
+      setPendingIdentity({ ...pendingIdentity, username, token: result.token });
+      // The token replaces it from here on: verifying and resending both prove
+      // themselves with that instead, so there is nothing left for the password
+      // to do.
+      setPendingPassword(null);
       setResendAt(Date.now() + result.resendInMs);
       setAuthStep("code");
     } catch (err) {
@@ -360,15 +458,16 @@ function App() {
   }
 
   async function handleCodeSubmit(code: string) {
-    if (!pendingCredentials?.token) return;
+    if (!pendingIdentity?.token) return;
     setAuthError(null);
     setAuthSubmitting(true);
     try {
       const newUser = await verifyEmail({
-        email: pendingCredentials.email,
+        email: pendingIdentity.email,
         code,
-        token: pendingCredentials.token,
+        token: pendingIdentity.token,
       });
+      setPendingPassword(null);
       setUser(newUser);
     } catch (err) {
       // Two failures route the user back to an earlier step instead of just
@@ -387,13 +486,13 @@ function App() {
   }
 
   async function handleResendCode() {
-    if (!pendingCredentials?.token || resendSubmitting) return;
+    if (!pendingIdentity?.token || resendSubmitting) return;
     setAuthError(null);
     setResendSubmitting(true);
     try {
       const result = await resendCode({
-        email: pendingCredentials.email,
-        token: pendingCredentials.token,
+        email: pendingIdentity.email,
+        token: pendingIdentity.token,
       });
       setResendAt(Date.now() + result.resendInMs);
     } catch (err) {
@@ -415,22 +514,76 @@ function App() {
     }
   }
 
+  function handleForgotPassword() {
+    setAuthStep("forgot");
+    setAuthError(null);
+    setAuthNotice(null);
+    setPendingPassword(null);
+    setResendAt(null);
+  }
+
+  async function handleRequestPasswordReset(email: string) {
+    setAuthError(null);
+    setAuthNotice(null);
+    setAuthSubmitting(true);
+    try {
+      await requestPasswordReset(email);
+      // The server answers the same way whether or not this address has an
+      // account, so this step always advances. The code screen carries the "if
+      // that address has an account" wording that makes that honest.
+      setPendingIdentity({ email });
+      setAuthStep("reset");
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
+
+  async function handleResetPassword(input: { code: string; newPassword: string }) {
+    if (!pendingIdentity) return;
+    setAuthError(null);
+    setAuthSubmitting(true);
+    try {
+      await resetPassword({ email: pendingIdentity.email, ...input });
+      // A reset ends every session for that account rather than starting one,
+      // so there is nobody to sign in as here — back to the sign-in screen with
+      // the address still filled in.
+      setAuthStep("credentials");
+      setPendingPassword(null);
+      setResendAt(null);
+      setAuthNotice("Password changed. Sign in with your new one.");
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
+
   function handleAuthBack() {
     setAuthStep("credentials");
     setAuthError(null);
+    setAuthNotice(null);
     setResendAt(null);
-    // `pendingCredentials` is kept on purpose: it is what fills the email field
-    // back in. Clearing it made "use a different email" wipe the address the
-    // user had just typed correctly, so changing one character of it meant
-    // retyping the whole thing.
+    // The password goes, the address stays. `pendingIdentity` is what fills the
+    // email field back in: clearing it made "use a different email" wipe the
+    // address the user had just typed correctly, so changing one character of
+    // it meant retyping the whole thing. The password has no such excuse — the
+    // form doesn't prefill it, so keeping it would only mean holding a
+    // plaintext secret nothing is going to read.
+    setPendingPassword(null);
   }
 
+  /**
+   * Rejects when the server didn't end the session, and the local state is only
+   * cleared once it did. Signing out locally regardless is what left a live
+   * `sid` row and its cookie behind on a shared machine after a network blip —
+   * the next person to open the tab was signed straight back in.
+   */
   async function handleLogout() {
     await logout();
     setUser(null);
-    setAuthStep("credentials");
-    setPendingCredentials(null);
-    setResendAt(null);
+    clearAuthState();
     setAuthError(null);
   }
 
@@ -441,9 +594,7 @@ function App() {
    */
   function handleAccountDeleted() {
     setUser(null);
-    setAuthStep("credentials");
-    setPendingCredentials(null);
-    setResendAt(null);
+    clearAuthState();
     setAuthError(null);
   }
 
@@ -455,13 +606,17 @@ function App() {
     return (
       <AuthPage
         step={authStep}
-        email={pendingCredentials?.email}
+        email={pendingIdentity?.email}
         onSubmitCredentials={handleCredentialsSubmit}
         onSubmitUsername={handleUsernameSubmit}
         onSubmitCode={handleCodeSubmit}
         onResendCode={handleResendCode}
+        onForgotPassword={handleForgotPassword}
+        onRequestPasswordReset={handleRequestPasswordReset}
+        onResetPassword={handleResetPassword}
         onBack={handleAuthBack}
         error={authError}
+        notice={authNotice}
         submitting={authSubmitting}
         resendAt={resendAt}
         resendSubmitting={resendSubmitting}

@@ -7,11 +7,27 @@ type PostGridProps = {
   /** Owner of every photo in the grid — shown in the preview opened on click. */
   username: string;
   avatarUrl: string | null;
+  /** Passed through to the preview; its absence is what hides Delete there. */
+  onPostDeleted?: (postId: string) => void;
+  /** Bubbles a comment add/delete out so the list backing this grid can refetch. */
+  onCountsChanged?: () => void;
 };
 
 /** Instagram-style 3-across grid of a profile's photos, cropped to squares. */
-export function PostGrid({ posts, username, avatarUrl }: PostGridProps) {
-  const [previewPost, setPreviewPost] = useState<PostSummary | null>(null);
+export function PostGrid({
+  posts,
+  username,
+  avatarUrl,
+  onPostDeleted,
+  onCountsChanged,
+}: PostGridProps) {
+  // The id rather than the post itself: a snapshot goes stale the moment the
+  // list behind it is refetched, so an open preview kept showing counts from
+  // before the comment that triggered the refetch — and would happily outlive
+  // the post it describes. Looking it up each render closes the preview by
+  // itself once the post is gone.
+  const [previewPostId, setPreviewPostId] = useState<string | null>(null);
+  const previewPost = posts.find((post) => post.id === previewPostId) ?? null;
 
   if (posts.length === 0) {
     return <p className="py-8 text-center text-sm text-neutral-400">No posts yet.</p>;
@@ -24,7 +40,7 @@ export function PostGrid({ posts, username, avatarUrl }: PostGridProps) {
           <button
             key={post.id}
             type="button"
-            onClick={() => setPreviewPost(post)}
+            onClick={() => setPreviewPostId(post.id)}
             aria-label="View photo"
             className="aspect-square cursor-pointer overflow-hidden bg-neutral-800"
           >
@@ -44,7 +60,15 @@ export function PostGrid({ posts, username, avatarUrl }: PostGridProps) {
           post={previewPost}
           username={username}
           avatarUrl={avatarUrl}
-          onClose={() => setPreviewPost(null)}
+          onClose={() => setPreviewPostId(null)}
+          onDeleted={
+            onPostDeleted &&
+            ((postId) => {
+              setPreviewPostId(null);
+              onPostDeleted(postId);
+            })
+          }
+          onCountsChanged={onCountsChanged}
         />
       )}
     </>

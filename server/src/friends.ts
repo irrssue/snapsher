@@ -7,14 +7,14 @@ import {
   declineFriendRequest,
   FriendRequestError,
   getPublicUser,
+  listFriendRequests,
   listFriends,
-  listIncomingRequests,
   removeFriend,
   searchUsers,
   sendFriendRequest,
   type Actor,
 } from "./friendsStore.js";
-import { listPostsFor, postCountFor } from "./postsStore.js";
+import { listPostsFor, PostAccessError, postCountFor } from "./postsStore.js";
 
 function actorOf(req: express.Request): Actor {
   return { userId: req.auth!.user.id };
@@ -34,8 +34,14 @@ friendsRouter.get("/", (req, res) => {
   res.json({ friends: listFriends(actorOf(req)) });
 });
 
+/**
+ * Both directions, not a bare array of incoming ones. A sent request had no
+ * representation the client could read back, so "Requested" was component state
+ * that a reload destroyed — and since search hid the target as well, the person
+ * you had just added looked like they had left the app.
+ */
 friendsRouter.get("/requests", (req, res) => {
-  res.json({ requests: listIncomingRequests(actorOf(req)) });
+  res.json(listFriendRequests(actorOf(req)));
 });
 
 friendsRouter.post("/requests", rateLimit(config.rateLimits.friendRequest), (req, res) => {
@@ -55,7 +61,40 @@ friendsRouter.post("/requests", rateLimit(config.rateLimits.friendRequest), (req
   }
 });
 
-friendsRouter.post("/requests/:id/accept", (req, res) => {
+/**
+ * Accept, decline/cancel and remove all carry the friend-request limiter.
+ *
+ * None of them is an access-control gap — every one checks that the caller is a
+ * party to the row it names — but all three take an arbitrary id, and `remove`
+ * in particular runs a five-statement transaction with two correlated
+ * subqueries over `posts`. Thirty an hour is far past what managing your actual
+ * friends takes, and well under what walking a range of ids costs the database.
+ *
+ * One instance shared by all three, deliberately unlike the two separate
+ * `userSearch` limiters below: those guard genuinely different reads, whereas
+ * giving each of these its own store would just hand a walker three independent
+ * budgets to spend.
+ */
+const friendActionLimit = rateLimit(config.rateLimits.friendRequest);
+
+function handleRequestRemoval(req: express.Request, res: express.Response) {
+  const requestId = parseId(req.params.id);
+  if (requestId === null) {
+    return res.status(404).json({ error: "That request no longer exists." });
+  }
+
+  try {
+    declineFriendRequest(actorOf(req), requestId);
+    res.status(204).end();
+  } catch (err) {
+    if (err instanceof FriendRequestError) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    throw err;
+  }
+}
+
+friendsRouter.post("/requests/:id/accept", friendActionLimit, (req, res) => {
   const requestId = parseId(req.params.id);
   if (requestId === null) return res.status(404).json({ error: "Not found." });
 
@@ -70,22 +109,22 @@ friendsRouter.post("/requests/:id/accept", (req, res) => {
   }
 });
 
-friendsRouter.post("/requests/:id/decline", (req, res) => {
-  const requestId = parseId(req.params.id);
-  if (requestId === null) return res.status(404).json({ error: "Not found." });
+/**
+ * One route for both halves of getting rid of a pending request: the addressee
+ * declining it and the requester cancelling it are the same row going away, and
+ * `declineFriendRequest` already accepted either party. Cancelling simply had
+ * no route reaching it before.
+ */
+friendsRouter.delete("/requests/:id", friendActionLimit, handleRequestRemoval);
 
-  try {
-    declineFriendRequest(actorOf(req), requestId);
-    res.json({ ok: true });
-  } catch (err) {
-    if (err instanceof FriendRequestError) {
-      return res.status(err.status).json({ error: err.message });
-    }
-    throw err;
-  }
-});
+/**
+ * The pre-DELETE spelling, kept working so a browser still holding an older
+ * bundle doesn't lose the ability to decline. Same handler, same guards; the
+ * only difference a caller sees is 204 instead of `{ ok: true }`.
+ */
+friendsRouter.post("/requests/:id/decline", friendActionLimit, handleRequestRemoval);
 
-friendsRouter.delete("/:id", (req, res) => {
+friendsRouter.delete("/:id", friendActionLimit, (req, res) => {
   const friendUserId = parseId(req.params.id);
   if (friendUserId === null) return res.status(404).json({ error: "Not found." });
 
@@ -135,15 +174,37 @@ usersRouter.get("/:id", rateLimit(config.rateLimits.userSearch), (req, res) => {
 });
 
 /**
- * The Instagram-style grid on a profile screen — own or someone else's.
- * Same audience as `/:id` above: any signed-in member, not just friends.
+ * The Instagram-style grid on a profile screen — your own, or a friend's.
+ *
+ * Narrower than `/:id` above, which stays open to any member: about.md makes a
+ * profile's avatar, username and post count public within the app and stops
+ * there. The photos are the private part, and this route handed them out — 300
+ * of anybody's, with captions and timestamps — to any signed-in account. See
+ * the policy note in postsStore.ts.
+ *
+ * A stranger gets 403 `not_friends` rather than an empty list, so the client can
+ * say why the grid is locked instead of rendering a profile that looks like it
+ * has never posted next to a post count that says otherwise. A user id that
+ * doesn't exist still 404s, and `/:id` already answers that same question to the
+ * same audience, so the two responses disclose nothing between them.
+ *
+ * The rate limiter is its own call, and its own store, for the reason `/:id`
+ * gives: this route is a strictly richer answer to the same enumeration walk,
+ * and it was the one route in the pair with no limiter at all.
  */
-usersRouter.get("/:id/posts", (req, res) => {
+usersRouter.get("/:id/posts", rateLimit(config.rateLimits.userSearch), (req, res) => {
   const targetId = parseId(req.params.id);
   if (targetId === null) return res.status(404).json({ error: "Not found." });
 
   const user = getPublicUser(targetId);
   if (!user) return res.status(404).json({ error: "Not found." });
 
-  res.json({ posts: listPostsFor(actorOf(req), targetId) });
+  try {
+    res.json({ posts: listPostsFor(actorOf(req), targetId) });
+  } catch (err) {
+    if (err instanceof PostAccessError) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
+    throw err;
+  }
 });
