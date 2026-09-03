@@ -108,18 +108,112 @@ export function useDialogFocus<T extends HTMLElement>() {
   return ref;
 }
 
+/* ------------------------------------------------------- History dismissal */
+
 /**
- * Makes the device Back gesture close an overlay instead of leaving the site.
+ * Making the device Back gesture close an overlay instead of leaving the site
+ * takes one throwaway history entry per open overlay. The bookkeeping for those
+ * entries lives here, at module scope, because it is fundamentally a property
+ * of the stack of overlays rather than of any one of them — and every bug this
+ * replaced came from a shell trying to decide it alone.
  *
- * Nothing in the app touched `history`, so on Android the hardware Back button
- * and on iOS the edge swipe navigated away from Snapsher entirely — with a
- * photo preview open, the reflex that every other app trains dumped the user
- * out. This pushes one throwaway entry while the overlay is mounted and pops it
- * on close, so Back and the close button do the same thing.
+ * Two rules the per-shell version broke:
  *
- * `closingRef` keeps the two paths from fighting: closing via the UI has to
- * remove the entry this pushed, and doing that fires `popstate`, which would
- * otherwise call `onClose` a second time.
+ *  - A shell that closes while another opens in the same commit must leave the
+ *    history depth alone. Settings handing off to Change password did a
+ *    `history.back()` on the way out and a `pushState` on the way in; `back()`
+ *    is asynchronous, so its `popstate` landed *after* the new entry existed
+ *    and dismissed the dialog that had just opened. Change password, Delete
+ *    account and the avatar cropper all vanished the instant they were asked
+ *    for.
+ *  - A `popstate` this code caused itself is not a Back gesture. Closing a
+ *    stacked overlay used to unwind its own entry, and the listener still
+ *    registered by the overlay *underneath* took that as Back — so dismissing
+ *    a photo opened from a profile closed the profile with it.
+ *
+ * Both fall out of tracking a desired depth and reconciling to it once, in a
+ * microtask, after React has finished committing.
+ */
+type Overlay = { dismiss: () => void };
+
+/** Open overlays, oldest first — the last entry is the topmost. */
+const overlays: Overlay[] = [];
+/** Marker entries we believe are currently on the history stack. */
+let markerCount = 0;
+/** Set while a traversal we asked for is in flight, so we can ignore its pop. */
+let unwinding = false;
+let syncQueued = false;
+let listening = false;
+
+/** Identifies our own entries, and records the depth each one stands for. */
+const MARKER = "snapsherOverlayDepth";
+
+function markerDepth(state: unknown): number {
+  if (typeof state !== "object" || state === null) return 0;
+  const depth = (state as Record<string, unknown>)[MARKER];
+  return typeof depth === "number" ? depth : 0;
+}
+
+/**
+ * Brings the history depth in line with the number of open overlays. Deferred
+ * and coalesced, so a close and an open that happen in the same commit cancel
+ * out instead of racing each other through the history queue.
+ */
+function syncHistory() {
+  syncQueued = false;
+  // A traversal is still in flight; its `popstate` re-runs this with settled
+  // numbers. Acting now would be reconciling against a depth we don't have yet.
+  if (unwinding) return;
+
+  const wanted = overlays.length;
+  if (wanted === markerCount) return;
+
+  if (wanted > markerCount) {
+    while (markerCount < wanted) {
+      markerCount++;
+      window.history.pushState({ [MARKER]: markerCount }, "");
+    }
+    return;
+  }
+
+  const delta = markerCount - wanted;
+  markerCount = wanted;
+  unwinding = true;
+  // One `go`, not `delta` calls to `back()`: a multi-step traversal reports a
+  // single `popstate`, so unwinding two entries with two calls would leave the
+  // second one waiting for an event that never arrives.
+  window.history.go(-delta);
+}
+
+function scheduleSync() {
+  if (syncQueued) return;
+  syncQueued = true;
+  queueMicrotask(syncHistory);
+}
+
+function onPopState(event: PopStateEvent) {
+  if (unwinding) {
+    unwinding = false;
+    // Anything that changed while the traversal was in flight is still owed.
+    scheduleSync();
+    return;
+  }
+
+  // A real Back (or Forward): the entry we landed on says how many overlays
+  // the user expects to still be open.
+  const depth = markerDepth(event.state);
+  markerCount = depth;
+  // Topmost first, and off a copy — `dismiss` unmounts, which splices.
+  for (const overlay of overlays.slice(depth).reverse()) overlay.dismiss();
+  // An overlay that refuses to close (mid-delete, say) gets its entry pushed
+  // straight back, so the next Back tries again rather than leaving the site.
+  scheduleSync();
+}
+
+/**
+ * Registers an overlay for Back-to-dismiss for as long as it is mounted.
+ * `onClose` may decline to close — the history depth is reconciled to whatever
+ * is actually still open either way.
  */
 export function useHistoryDismiss(onClose: () => void) {
   const onCloseRef = useRef(onClose);
@@ -128,22 +222,18 @@ export function useHistoryDismiss(onClose: () => void) {
   });
 
   useEffect(() => {
-    const marker = { snapsherOverlay: Date.now() };
-    window.history.pushState(marker, "");
-    let popped = false;
-
-    const onPopState = () => {
-      popped = true;
-      onCloseRef.current();
-    };
-    window.addEventListener("popstate", onPopState);
+    const overlay: Overlay = { dismiss: () => onCloseRef.current() };
+    overlays.push(overlay);
+    if (!listening) {
+      listening = true;
+      window.addEventListener("popstate", onPopState);
+    }
+    scheduleSync();
 
     return () => {
-      window.removeEventListener("popstate", onPopState);
-      // Already unwound by the Back gesture itself; going back again would eat
-      // a real entry and navigate the user off the page.
-      if (popped) return;
-      window.history.back();
+      const index = overlays.indexOf(overlay);
+      if (index !== -1) overlays.splice(index, 1);
+      scheduleSync();
     };
   }, []);
 }
