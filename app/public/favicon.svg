@@ -1,10 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" role="img" aria-label="Snapsher">
   <rect width="180" height="180" rx="40" fill="#0c1014"/>
-  <!-- The countdown ring: the unserved window in grey, the part already waited
-       out in white, and the photo itself at the centre. -->
-  <circle cx="90" cy="90" r="51" fill="none" stroke="#2a2f36" stroke-width="11"/>
-  <circle cx="90" cy="90" r="51" fill="none" stroke="#ffffff" stroke-width="11"
-          stroke-linecap="round" stroke-dasharray="231.6 320.4"
-          transform="rotate(-90 90 90)"/>
-  <circle cx="90" cy="90" r="20" fill="#ffffff"/>
+  <!-- A square take on the browser's generic globe/"internet" icon: an outline
+       circle with a vertical meridian ellipse and horizontal latitude lines,
+       clipped to the globe so nothing bleeds past its edge. -->
+  <defs>
+    <clipPath id="globe">
+      <circle cx="90" cy="90" r="55"/>
+    </clipPath>
+  </defs>
+  <circle cx="90" cy="90" r="55" fill="none" stroke="#ffffff" stroke-width="8"/>
+  <g clip-path="url(#globe)" stroke="#ffffff" stroke-width="6" fill="none">
+    <ellipse cx="90" cy="90" rx="24" ry="55"/>
+    <line x1="35" y1="90" x2="145" y2="90"/>
+    <line x1="42" y1="61" x2="138" y2="61"/>
+    <line x1="42" y1="119" x2="138" y2="119"/>
+  </g>
 </svg>
