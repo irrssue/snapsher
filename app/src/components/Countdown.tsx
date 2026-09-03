@@ -102,14 +102,10 @@ export function Countdown({
     );
   }
 
-  if (canPost) {
-    return (
-      <div className="flex flex-col items-center gap-2 py-2 text-center">
-        <p className="text-base text-white">Your window is open.</p>
-        <p className="text-xs text-neutral-400">One photo, every 12 hours.</p>
-      </div>
-    );
-  }
+  // Nothing to say once the window is open: the compose button is already
+  // right there, and rendering an empty block here would only leave a gap in
+  // the home column's spacing.
+  if (canPost) return null;
 
   // Fraction of the window already served. Clamped because a clock that drifts
   // the wrong way would otherwise draw an arc longer than the circle.
