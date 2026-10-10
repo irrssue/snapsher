@@ -76,7 +76,15 @@ export async function fetchUserProfile(userId: number): Promise<PublicProfile> {
  * Photos are friends-only, so this answers 403 `not_friends` for a stranger's
  * grid. That is a state to render, not an error: see `PublicProfileModal`.
  */
-export async function fetchUserPosts(userId: number): Promise<PostSummary[]> {
-  const { posts } = await api<{ posts: PostSummary[] }>(`/api/users/${userId}/posts`);
-  return expectArray<PostSummary>(posts, "profile grid");
+export type ProfilePostPage = { posts: PostSummary[]; nextCursor: string | null };
+
+export async function fetchUserPostPage(userId: number, cursor?: string): Promise<ProfilePostPage> {
+  const query = new URLSearchParams({ page: "1" });
+  if (cursor) query.set("before", cursor);
+  const result = await api<ProfilePostPage>(`/api/users/${userId}/posts?${query}`);
+  const posts = expectArray<PostSummary>(result?.posts, "profile grid");
+  if (result.nextCursor !== null && typeof result.nextCursor !== "string") {
+    throw new Error("Couldn't read the next photo page.");
+  }
+  return { posts, nextCursor: result.nextCursor };
 }

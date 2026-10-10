@@ -267,6 +267,7 @@ db.exec(
 db.exec(
   "CREATE INDEX IF NOT EXISTS idx_posts_user_created ON posts (user_id, created_at DESC)",
 );
+db.exec("CREATE INDEX IF NOT EXISTS idx_posts_profile_page ON posts (user_id, created_at DESC, id DESC)");
 db.exec(
   "CREATE INDEX IF NOT EXISTS idx_comments_post_created ON comments (post_id, created_at)",
 );

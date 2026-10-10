@@ -14,7 +14,7 @@ import {
   sendFriendRequest,
   type Actor,
 } from "./friendsStore.js";
-import { listPostsFor, PostAccessError, postCountFor } from "./postsStore.js";
+import { listPostsFor, listPostPageFor, parsePostCursor, PostAccessError, postCountFor } from "./postsStore.js";
 
 function actorOf(req: express.Request): Actor {
   return { userId: req.auth!.user.id };
@@ -203,6 +203,14 @@ usersRouter.get("/:id/posts", rateLimit(config.rateLimits.userSearch), (req, res
   if (!user) return res.status(404).json({ error: "Not found." });
 
   try {
+    const cursor = req.query.before === undefined ? undefined : parsePostCursor(req.query.before);
+    if (cursor === null) {
+      return res.status(400).json({ error: "Invalid photo cursor.", code: "invalid_cursor" });
+    }
+    if (req.query.page === "1") {
+      return res.json(listPostPageFor(actorOf(req), targetId, cursor));
+    }
+    // Keep older browser bundles working through a deploy.
     res.json({ posts: listPostsFor(actorOf(req), targetId) });
   } catch (err) {
     if (err instanceof PostAccessError) {

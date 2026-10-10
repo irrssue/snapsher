@@ -7,7 +7,8 @@ import { PublicProfileModal } from "./components/PublicProfileModal";
 import { Countdown } from "./components/Countdown";
 import { ComposeModal } from "./components/ComposeModal";
 import { ProfileAvatar } from "./components/ProfileAvatar";
-import { PostGrid } from "./components/PostGrid";
+import { ProfilePostArchive } from "./components/ProfilePostArchive";
+import { useProfilePosts } from "./useProfilePosts";
 import {
   AuthPage,
   type AuthCredentialsData,
@@ -24,9 +25,9 @@ import {
   verifyEmail,
 } from "./api/auth";
 import { createPost, fetchPosts, fetchQuota } from "./api/posts";
-import { fetchFriends, fetchUserPosts, removeFriend, type Friend } from "./api/friends";
+import { fetchFriends, removeFriend, type Friend } from "./api/friends";
 import { ApiError, onSessionExpired } from "./api/http";
-import type { Post, PostSummary, User } from "./types";
+import type { Post, User } from "./types";
 import { ErrorState, Skeleton, Wordmark } from "./components/ui";
 
 /**
@@ -97,10 +98,8 @@ function SignedInApp({
   const [postCount, setPostCount] = useState(0);
   const [composing, setComposing] = useState(false);
   const [friends, setFriends] = useState<Friend[]>([]);
-  /** Backs the grid on the profile screen — fetched separately from `posts`
-   * since the home feed is friends-only and capped, and would otherwise miss
-   * older posts of the user's own once enough friend activity pushes it out. */
-  const [myPosts, setMyPosts] = useState<PostSummary[]>([]);
+  const archive = useProfilePosts(user.id);
+  const { refresh: refreshMyPosts } = archive;
   const [showFriendsPopup, setShowFriendsPopup] = useState(false);
   const [friendsPopupError, setFriendsPopupError] = useState<string | null>(null);
   /** The user id behind an open public-profile modal — null means none is open. */
@@ -138,7 +137,6 @@ function SignedInApp({
    */
   const feedGeneration = useRef(0);
   const friendsGeneration = useRef(0);
-  const myPostsGeneration = useRef(0);
 
   /**
    * Also run whenever a friendship changes — accepting a request in
@@ -189,16 +187,6 @@ function SignedInApp({
     }
   }, []);
 
-  const refreshMyPosts = useCallback(async () => {
-    const generation = ++myPostsGeneration.current;
-    try {
-      const next = await fetchUserPosts(user.id);
-      if (generation === myPostsGeneration.current) setMyPosts(next);
-    } catch {
-      // The grid just stays stale/empty until the next successful refresh.
-    }
-  }, [user.id]);
-
   /** Passed to `FriendsTab`: a request being accepted changes both of these. */
   const handleFriendsChanged = useCallback(() => {
     refreshFeed();
@@ -207,13 +195,13 @@ function SignedInApp({
 
   useEffect(() => {
     let active = true;
-    Promise.all([refreshFeed(), refreshFriends(), refreshMyPosts()]).finally(() => {
+    Promise.all([refreshFeed(), refreshFriends()]).finally(() => {
       if (active) setLoadingFeed(false);
     });
     return () => {
       active = false;
     };
-  }, [refreshFeed, refreshFriends, refreshMyPosts]);
+  }, [refreshFeed, refreshFriends]);
 
   async function handleRemoveFriend(friend: Friend) {
     setFriendsPopupError(null);
@@ -246,7 +234,7 @@ function SignedInApp({
    */
   function handlePostDeleted(postId: string) {
     setPosts((current) => current.filter((post) => post.id !== postId));
-    setMyPosts((current) => current.filter((post) => post.id !== postId));
+    archive.removePost(postId);
     setPostCount((current) => Math.max(0, current - 1));
   }
 
@@ -254,19 +242,7 @@ function SignedInApp({
     try {
       const { post, nextAllowedAt: allowedAt } = await createPost(input);
       setPosts((current) => [post, ...current]);
-      setMyPosts((current) => [
-        {
-          id: post.id,
-          photoUrl: post.photoUrl,
-          createdAt: post.createdAt,
-          description: post.description,
-          likedByMe: post.likedByMe,
-          isOwner: post.isOwner,
-          likeCount: post.likeCount,
-          commentCount: post.commentCount,
-        },
-        ...current,
-      ]);
+      void refreshMyPosts();
       setNextAllowedAt(allowedAt);
       setPostCount((current) => current + 1);
       setComposing(false);
@@ -395,8 +371,8 @@ function SignedInApp({
 
             <Countdown nextAllowedAt={nextAllowedAt} clockOffset={clockOffset} />
 
-            <PostGrid
-              posts={myPosts}
+            <ProfilePostArchive
+              archive={archive}
               username={user.username}
               avatarUrl={user.avatarUrl}
               onPostDeleted={handlePostDeleted}

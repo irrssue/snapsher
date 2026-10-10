@@ -22,16 +22,18 @@ const POST_INTERVAL_MS = 12 * 60 * 60 * 1000;
 
 const FEED_LIMIT = 100;
 
-/**
- * The profile grid was the one read with no cap at all, so any member could ask
- * for any other member's entire post history 600 times per quarter hour, and
- * `likeStatsFor`/`commentCountFor` would compile a fresh prepared statement for
- * every distinct post count they had never seen before. The 12-hour rule bounds
- * a history to ~730 posts a year, so this is a robustness bound rather than an
- * urgent one — but it also makes that statement-cache key space finite, which
- * is what stops it growing for the life of the process.
- */
+/** Legacy bundles keep their bounded response; current clients page explicitly. */
 const PROFILE_GRID_LIMIT = 300;
+const PROFILE_PAGE_SIZE = 36;
+
+export type PostCursor = { createdAt: number; id: number };
+
+export function parsePostCursor(raw: unknown): PostCursor | null {
+  if (typeof raw !== "string" || !/^\d{1,16}:\d{1,16}$/.test(raw)) return null;
+  const [createdAt, id] = raw.split(":").map(Number);
+  return Number.isSafeInteger(createdAt) && Number.isSafeInteger(id) && id > 0
+    ? { createdAt, id } : null;
+}
 
 /**
  * Row-level access control for posts.
@@ -178,7 +180,12 @@ const selectLastPostAt = db.prepare("SELECT last_post_at FROM users WHERE id = ?
 const markPostedAt = db.prepare("UPDATE users SET last_post_at = ? WHERE id = ?");
 const selectPostCount = db.prepare("SELECT COUNT(*) AS count FROM posts WHERE user_id = ?");
 const selectUserPosts = db.prepare(
-  "SELECT id, description, photo_file, created_at FROM posts WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+  "SELECT id, description, photo_file, created_at FROM posts WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+);
+const selectUserPostPage = db.prepare(
+  `SELECT id, description, photo_file, created_at FROM posts
+    WHERE user_id = ? AND (created_at < ? OR (created_at = ? AND id < ?))
+    ORDER BY created_at DESC, id DESC LIMIT ?`,
 );
 const selectPhotoOwner = db.prepare(
   "SELECT user_id FROM posts WHERE photo_file = ?",
@@ -335,15 +342,31 @@ function canSeePostsOf(actor: Actor, userId: number): boolean {
  * on, and there is nothing for a `canInteract` flag to say.
  */
 export function listPostsFor(actor: Actor, userId: number): PostSummary[] {
+  return readProfilePosts(actor, userId).posts;
+}
+
+export function listPostPageFor(actor: Actor, userId: number, cursor?: PostCursor) {
+  return readProfilePosts(actor, userId, { cursor });
+}
+
+function readProfilePosts(actor: Actor, userId: number, page?: { cursor?: PostCursor }) {
   assertActor(actor);
   if (!canSeePostsOf(actor, userId)) {
     throw new PostAccessError("You can only see photos from friends.", 403, "not_friends");
   }
 
-  const rows = selectUserPosts.all(userId, PROFILE_GRID_LIMIT) as Pick<
+  const limit = page ? PROFILE_PAGE_SIZE : PROFILE_GRID_LIMIT;
+  const cursor = page?.cursor;
+  const rows = (cursor
+    ? selectUserPostPage.all(userId, cursor.createdAt, cursor.createdAt, cursor.id, limit + 1)
+    : selectUserPosts.all(userId, limit + 1)) as Pick<
     PostRow,
     "id" | "description" | "photo_file" | "created_at"
   >[];
+  const hasMore = rows.length > limit;
+  rows.splice(limit);
+  const last = rows.at(-1);
+  const nextCursor = hasMore && last ? `${last.created_at}:${last.id}` : null;
   const postIds = rows.map((row) => row.id);
   const stats = likeStatsFor(actor, postIds);
   const isOwner = userId === actor.userId;
@@ -354,7 +377,7 @@ export function listPostsFor(actor: Actor, userId: number): PostSummary[] {
   // justification for the badge (about.md: the count saves a scroll, it doesn't
   // reveal anything a reader couldn't already count).
   const commentCounts = commentCountFor(postIds);
-  return rows.map((row) => {
+  const posts = rows.map((row) => {
     const rowStats = stats.get(row.id);
     return {
       id: String(row.id),
@@ -367,6 +390,7 @@ export function listPostsFor(actor: Actor, userId: number): PostSummary[] {
       commentCount: commentCounts.get(row.id) ?? 0,
     };
   });
+  return { posts, nextCursor };
 }
 
 /**

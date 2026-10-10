@@ -1,10 +1,9 @@
 import { useEffect, useId, useState } from "react";
 import { CloseIcon, LockIcon } from "./icons";
 import { Avatar, ErrorState, ModalShell, Skeleton } from "./ui";
-import { fetchUserProfile, fetchUserPosts, type PublicProfile } from "../api/friends";
-import { ApiError } from "../api/http";
-import { PostGrid } from "./PostGrid";
-import type { PostSummary } from "../types";
+import { fetchUserProfile, type PublicProfile } from "../api/friends";
+import { ProfilePostArchive } from "./ProfilePostArchive";
+import { useProfilePosts } from "../useProfilePosts";
 
 type PublicProfileModalProps = {
   userId: number;
@@ -23,42 +22,22 @@ type PublicProfileModalProps = {
  */
 export function PublicProfileModal({ userId, onClose }: PublicProfileModalProps) {
   const [profile, setProfile] = useState<PublicProfile | null>(null);
-  const [posts, setPosts] = useState<PostSummary[]>([]);
+  const archive = useProfilePosts(userId);
   const [error, setError] = useState<string | null>(null);
   /** The grid is friends-only and this viewer isn't one — a state, not a failure. */
-  const [locked, setLocked] = useState(false);
+  const { locked } = archive;
   const headingId = useId();
 
   useEffect(() => {
     let active = true;
     setProfile(null);
-    setPosts([]);
     setError(null);
-    setLocked(false);
     fetchUserProfile(userId)
       .then((next) => {
         if (active) setProfile(next);
       })
       .catch((err) => {
         if (active) setError(err instanceof Error ? err.message : "Couldn't load that profile.");
-      });
-    // Fetched independently of the profile above: a post-grid failure
-    // shouldn't block the avatar/username/count from showing.
-    fetchUserPosts(userId)
-      .then((next) => {
-        if (active) setPosts(next);
-      })
-      .catch((err) => {
-        // Photos are friends-only, so a 403 here is the ordinary answer for
-        // someone you haven't added — not an error, and emphatically not the
-        // "No posts yet." an empty grid would otherwise claim about a profile
-        // that may be full of them.
-        if (active && err instanceof ApiError && err.code === "not_friends") {
-          setLocked(true);
-          return;
-        }
-        // Anything else: the grid just stays empty — not worth its own error
-        // message beside a header that loaded fine.
       });
     return () => {
       active = false;
@@ -119,8 +98,9 @@ export function PublicProfileModal({ userId, onClose }: PublicProfileModalProps)
                   </p>
                 </div>
               ) : (
-                <PostGrid
-                  posts={posts}
+                <ProfilePostArchive
+                  archive={archive}
+                  onCountsChanged={archive.refresh}
                   username={profile.username}
                   avatarUrl={profile.avatarUrl}
                   emptyLabel={`@${profile.username} hasn't shared a photo yet.`}
