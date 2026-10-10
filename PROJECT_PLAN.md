@@ -93,3 +93,14 @@ with the repository's prescribed main-branch push followed by homeserver pull,
 both builds, and PM2 restart. The deployment must finish with PM2 online and
 successful HTTP checks. If this release must be reverted, revert its commit,
 push main and repeat the same rebuild; the unused index can safely remain.
+
+## Release status
+
+Implementation and local validation are complete and pushed to main in
+`7c3a776`. The working tree is clean. Production deployment remains blocked:
+SSH to `homelab` and its resolved tailnet address both timed out on port 22,
+so the homeserver pull, builds, and PM2 restart could not execute. The public
+site returns HTTP 200, which confirms availability of the existing deployment
+only. Resume the prescribed deployment when the homeserver is reachable; do
+not treat this release as live until the rebuilt checkout and PM2 process are
+verified.
