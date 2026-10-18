@@ -96,11 +96,32 @@ push main and repeat the same rebuild; the unused index can safely remain.
 
 ## Release status
 
-Implementation and local validation are complete and pushed to main in
-`7c3a776`. The working tree is clean. Production deployment remains blocked:
-SSH to `homelab` and its resolved tailnet address both timed out on port 22,
-so the homeserver pull, builds, and PM2 restart could not execute. The public
-site returns HTTP 200, which confirms availability of the existing deployment
-only. Resume the prescribed deployment when the homeserver is reachable; do
-not treat this release as live until the rebuilt checkout and PM2 process are
-verified.
+Live since 2026-10-18. `7c3a776` was pushed on 2026-10-09 but sat undeployed
+for nine days because SSH to `homelab` timed out on port 22.
+
+The timeout was not an application fault. The homeserver's Tailscale node key
+expired on 2026-10-08, its automatic re-registration on 2026-10-17 failed with
+a 502 from Tailscale's coordination server, and `tailscaled` has been logged
+out (`NeedsLogin`) since then. `homelab` resolves through MagicDNS to the
+tailnet address, so every SSH attempt went nowhere. The Cloudflare Tunnel does
+not depend on Tailscale, so the public site, sign-in included, stayed up the
+whole time on the previous build.
+
+The deployment ran over the home LAN instead, after confirming the host key
+matched the known `homelab` entry. It ran the prescribed pull, `npm ci` and
+build in both packages under Node v22.23.1, and a PM2 restart. Verified
+afterwards:
+
+- PM2 `snapsher` is online under the v22.23.1 interpreter.
+- `better-sqlite3` loads.
+- The boot log is clean, and `PORT`, `NODE_ENV`, `PUBLIC_HOST`,
+  `CLIENT_ORIGIN` and the mail settings are unchanged.
+- The site serves the rebuilt bundle.
+- `POST /api/auth/continue` answers in about a second from both the apex and
+  `www`.
+- A foreign `Origin` is still refused with `origin_rejected`.
+
+Tailscale on the homeserver is still logged out, and only someone with sudo
+there, or a browser login to the tailnet, can bring it back.
+Until that happens, deploys need the LAN path. To stop this recurring, disable
+key expiry for `homelab` in the Tailscale admin console.
